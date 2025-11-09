@@ -1,0 +1,107 @@
+---
+title: "NHANES DPQ - depression screener"
+output: html_notebook
+---
+
+Glen Pridham May 2025
+For preprocessing depression health variables.
+
+```{r}
+gRootName = "nhanes"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+outputDir = "C:/postdoc/nhanes" #analysis directory
+dataDir =  "C:/data/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+source("C:/postdoc/latent_variable_models.R")
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+library(RNHANES)
+```
+
+
+
+# load in data
+```{r}
+ageCol = "RIDAGEYR"
+sexCol = "RIAGENDR"
+```
+
+#demographics
+```{r}
+demo = read.csv(sprintf("%s/nhanes_demo/nhanes_demo.csv",dataDir))
+rownames(demo)=demo[,"SEQN"]
+```
+
+#exam data
+```{r}
+exam = read.csv(sprintf("%s/nhanes_exam/nhanes_exam.csv",dataDir))
+rownames(exam)=exam[,"SEQN"]
+
+exam[,"age"] = demo[rownames(exam),"RIDAGEYR"]
+exam[,"sex"] = demo[rownames(exam),"RIAGENDR"]
+exam[,"survey"] = demo[rownames(exam),"SDDSRVYR"]
+```
+
+codex for searching variable types
+```{r}
+codex = read.csv(sprintf("%s/nhanes_exam/nhanes_exam_vars.csv",dataDir),row.names=1)
+rownames(codex)=codex[,"Variable.Name"]
+```
+
+
+```{r}
+dxVars = colnames(exam)[grepl("DXX",colnames(exam)) | grepl("DXD",colnames(exam))]
+dx = exam[,c("age","sex","survey",dxVars)]
+
+dxCodex = codex[dxVars,]
+
+write.csv(dxCodex,sprintf("%s/data/dx_codex.csv",outputDir))
+```
+
+now preproc
+```{r}
+library(dplyr)
+age = dxx[,"age"]
+```
+
+```{r}
+AndStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi & l[[i]]
+  }
+  return(logi)
+}
+
+OrStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi | l[[i]]
+  }
+  return(logi)
+}
+```
+
+#save
+```{r}
+write.csv(dx,sprintf("%s/data/nhanes_dx.csv",outputDir))
+```

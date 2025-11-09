@@ -1,0 +1,899 @@
+---
+title: "Load NHANES"
+output: html_notebook
+---
+
+Glen Dec 2024
+
+Read NHANES fiels
+
+```{r}
+gRootName = "nhanes"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+outputDir = "C:/postdoc/nhanes" #analysis directory
+dataDir =  "C:/data/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+#library(RNHANES) #not working
+
+
+library(rvest)
+library(httr)
+library(stringr)
+library(haven)
+library(dplyr)
+
+```
+
+
+```{r}
+# Base URL for NHANES
+nhanes_base_url <- "https://wwwn.cdc.gov/nchs/nhanes/continuousnhanes/default.aspx"
+
+# Function to get all file URLs for a specific cycle
+get_file_urls <- function(component="Questionnaire") {
+  # Construct the URL for the cycle
+  #cycle_url <- sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=%s&CycleBeginYear=%s",component, substr(year, 1, 4))
+  #cycle_url <- sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=%s&CycleBeginYear=%s",component, year)
+  cycle_url <- sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=%s",component)
+  
+  
+  # Scrape the page to find .XPT file links
+  page <- read_html(cycle_url)
+  links <- page %>%
+    html_nodes("a") %>%
+    html_attr("href") %>%
+    str_subset("(?i)\\.XPT$") #?i makes it ignore case
+  
+  #print(cycle_url)
+  #print(links)
+  if (length(links) == 0) {
+      warning(sprintf("No .XPT links found for component %s.", component))
+  }
+  
+  # Create full URLs
+  links <- paste0("https://wwwn.cdc.gov", links)
+  return(links)
+}
+
+# Function to download all lab files for a specific cycle
+download_and_save_files <- function( dest_dir,final_dir,removeXPT=T,component="Questionnaire",name="clinic",maxSizeGB=.1) {
+  file_urls <- get_file_urls(component=component)
+  dir.create(final_dir, showWarnings = FALSE)
+  dir.create(dest_dir, showWarnings = FALSE)
+  
+  
+  ldata = list()
+  vars = character()
+  ids = character()
+  ind = 1
+  for (url in file_urls) 
+  {
+    file_name <- basename(url)
+    xpt_path <- file.path(dest_dir, file_name)  # Temporary XPT file path
+    csv_path <- file.path(dest_dir, paste0(tools::file_path_sans_ext(file_name), ".csv"))
+
+
+        #check size before downloading
+    response = HEAD(url)
+    sizeGB = as.numeric(headers(response)$`content-length`)/10^9    
+
+    if(sizeGB > maxSizeGB)
+    {
+      warning(sprintf("%s was too large (size: %.3f GB, max: %.3f GB), skipping...",xpt_path,sizeGB,maxSizeGB))
+      next
+    }
+    
+    message("Downloading: ", file_name)
+      
+
+    
+    # Download the .XPT file
+    GET(url, write_disk(xpt_path, overwrite = TRUE))
+    
+    # Read the XPT file and save as CSV
+    data <- read_xpt(xpt_path)
+    data = as.data.frame(data)
+    if(!("SEQN"%in%colnames(data)))
+    {
+      message("SEQN not found, skipping...")
+      if(removeXPT) file.remove(xpt_path)
+      next #skips instead
+      #data[,"SEQN"] = sprintf("%s0%d0%.0f",as.character(data[,1]),1:nrow(data),10^(ind)) #generates SEQN
+    }
+    #drop duplicates
+    logi = duplicated(data[,"SEQN"])
+    if(sum(logi)>0)
+    {
+      warning(sprintf("dropping %d repeated individuals",sum(logi)))
+      data = data[!logi,]
+    }
+    rownames(data)=data[,"SEQN"]
+    ldata[[ind]] = data
+    vars = c(vars,colnames(data))
+    ids = c(ids,data[,"SEQN"])
+    ind = ind + 1
+      
+    #print(table(is.na(data[,"RIDAGEYR"]))) #temp - where is the age info? 0 NAs here
+  
+      
+    # Remove the temporary XPT file
+    if(removeXPT) file.remove(xpt_path)
+  }
+  
+
+  
+  
+  ids = unique(ids)
+  vars = unique(c("SEQN",vars))
+
+  merged_data <- data.frame(matrix(NA,nrow=length(ids),ncol=length(vars)))
+  rownames(merged_data)=ids
+  colnames(merged_data)=vars
+  
+  
+  # Merge all datasets
+  for (i in 1:length(ldata)) {
+    merged_data[rownames(ldata[[i]]),colnames(ldata[[i]])] = ldata[[i]]
+
+  }
+  
+  #merged_data$year <- year
+  
+  #rownames(merged_data) = merged_data[,"SEQN"]
+  
+  # Save to CSV
+  write.csv(merged_data, sprintf("%s/nhanes_%s.csv", final_dir,name), row.names = FALSE)
+  
+}
+
+
+# Function to download and parse variable names from documentation
+download_and_extract_variable_names <- function(dest_dir,component="Laboratory",name="lab") 
+{
+  # URL of the NHANES 2001–2002 laboratory variable list
+  #url <- sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/variablelist.aspx?Component=%s&Cycle=%s#print",component,year)
+  url = sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/variablelist.aspx?Component=%s&Cycle=",component)
+  
+  # Read the HTML content from the URL
+  page <- read_html(url)
+
+  # Extract the table containing the variable list
+  variable_table <- page %>%
+    html_node("table") %>%  # Select the first table on the page
+    html_table(fill = TRUE) # Convert the HTML table to a data frame
+
+  # Display the first few rows of the extracted table
+  #head(variable_table)
+
+  variable_table = as.data.frame(variable_table)
+
+  #drop duplicates
+  variable_table = variable_table[!duplicated(variable_table[,1]),]
+  rownames(variable_table) = variable_table[,1]
+
+  write.csv(variable_table,sprintf("%s/nhanes_%s_vars.csv",dest_dir,name))
+  return(variable_table)
+}
+```
+
+```{r}
+library(rvest)
+library(dplyr)
+library(stringr)
+
+library(rvest)
+library(dplyr)
+library(stringr)
+
+GetCodebookUrlsNew <- function(component = "Questionnaire") {
+  # Get the webpage URL
+  cycle_url <- sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=%s", component)
+  
+  # Read the webpage
+  webpage <- read_html(cycle_url)
+  
+  # Extract the column names from the table header (<th>)
+  column_names <- webpage %>%
+    html_nodes("table th") %>%
+    html_text(trim = TRUE)
+  
+  # Extract all rows (<tr>) from the table, skipping the first (junk) row
+  rows <- webpage %>%
+    html_nodes("table tr") %>%
+    .[-1]  # Remove the first row
+  
+  # Process each row to extract text and links
+  table_data <- lapply(rows, function(row) {
+    # Extract row text (all cells)
+    row_text <- row %>%
+      html_nodes("td") %>%
+      html_text(trim = TRUE)
+    
+    # Extract the first link in the row (if any)
+    link <- row %>%
+      html_node("a") %>%
+      html_attr("href")
+    
+    # Return a combined list of row text and link
+    c(row_text, url = ifelse(is.null(link), NA, paste0("https://wwwn.cdc.gov", link)))
+    #c(row_text, url = ifelse(is.null(link), NA, paste0("https://wwwn.cdc.gov", sub("\\.htm$", "#Codebook.htm", link))))
+  })
+  
+  # Convert the list into a data frame
+  table_df <- do.call(rbind.data.frame, table_data)
+  
+  # Assign column names
+  if (length(column_names) == ncol(table_df) - 1) {
+    colnames(table_df) <- c(column_names, "url")
+  } else {
+    colnames(table_df) <- c(paste0("Column", seq_len(ncol(table_df) - 1)), "url")
+  }
+  
+  # Return the final table with links
+  return(table_df)
+}
+GetCodebookUrls <- function(component="Questionnaire") {
+  #gets urls and some additional info
+  cycle_url <- sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=%s",component)
+  
+  webpage <- read_html(cycle_url)
+  
+  table <- webpage %>%
+    html_node("table") %>%
+    html_table(fill = TRUE)
+
+  # Extract the links (doc file URLs)
+  links <- webpage %>%
+    html_nodes("table a") %>%
+    html_attr("href") %>%
+    str_subset("(?i)\\.htm$") #?i makes it ignore case #,negate=FALSE
+
+
+  # Create full URLs
+  links <- paste0("https://wwwn.cdc.gov", links)
+  
+  #print(colnames(table))
+  
+  table = as.data.frame(table)
+  table[,"url"] = links
+  
+  return(table)
+}
+
+
+GetCodebookUrlsOld <- function(component="Questionnaire") {
+  #just gets urls
+  cycle_url <- sprintf("https://wwwn.cdc.gov/nchs/nhanes/search/datapage.aspx?Component=%s",component)
+  
+  #old
+  
+  # Scrape the page to find .XPT file links
+  page <- read_html(cycle_url)
+  links <- page %>%
+    html_nodes("a") %>%
+    html_attr("href") %>%
+    str_subset("DataFiles") %>%
+    str_subset("(?i)\\.htm$") #?i makes it ignore case
+  
+  #print(cycle_url)
+  #print(links)
+  if (length(links) == 0) {
+      warning(sprintf("No .htm links found for component %s.", component))
+  }
+  
+  # Create full URLs
+  links <- paste0("https://wwwn.cdc.gov", links)
+  return(links)
+}
+
+
+GetCodebook = function(url)
+{
+  #url <- "https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/2005/DataFiles/DEMO_D.htm#Codebook"
+    #"https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/2007/DataFiles/PFQ_E.htm#Codebook"
+  #codebook has summary table including encoding, variable name and description
+
+# Read the HTML content
+page <- read_html(url)
+
+
+#first make sure codebook is present
+# Find all elements with ID "Codebook"
+codebook_elements <- page %>% html_elements("#Codebook")
+
+# Check if the "Codebook" section exists
+if (length(codebook_elements) == 0) {
+  warning(sprintf("Failed to find codebook for %s",url))
+  return(list(summaries="failed",results="failed"))
+}
+
+# Find the "Codebook" section
+codebook_div <- page %>% html_node("#Codebook")
+
+
+# Extract each variable entry
+entries <- codebook_div %>% html_nodes(".pagebreak")
+
+# Initialize a list to store results
+results <- list()
+
+for (entry in entries) {
+  #print(entry)
+  # Extract the variable title
+  vartitle <- entry %>%
+    html_node(".vartitle") %>%
+    html_text(trim = TRUE)
+  
+  # Extract key-value pairs
+  dl_items <- entry %>%
+    html_nodes("dl") %>%
+    html_children()
+  
+  # Define specific fields to extract
+  #keys <- dl_items %>%
+  #  html_nodes("dt") %>%
+  #  html_text(trim = TRUE)
+  keys <- dl_items[seq(1, length(dl_items), by = 2)] %>%  # Extract every odd element (<dt>)
+      html_text(trim = TRUE)
+  
+  #values <- dl_items %>%
+  #  html_nodes("dd") %>%
+  #  html_text(trim = TRUE)
+  values <- dl_items[seq(2, length(dl_items), by = 2)] %>%  # Extract every even element (<dd>)
+      html_text(trim = TRUE)
+  
+  #print(data.frame(k=keys,v=values))
+  
+  #check for repeated keys
+  unkey = unique(keys)
+  for (jj in 1:length(unkey))
+  {
+    logi = keys==unkey[jj]
+    values[logi] = paste(values[logi],collapse=";")
+  }
+  values = values[!duplicated(keys)]
+  keys = keys[!duplicated(keys)]
+  
+  #print(data.frame(k=keys,v=values))
+  
+  #print("make tibble")
+  # Filter for specific keys
+  info <- tibble(Key = keys, Value = values)
+  
+  # Pivot data for easier use
+  info_wide <- info %>%
+    pivot_wider(names_from = Key, values_from = Value)
+  
+  #print("k")
+  #print(info_wide$Target)
+  #print(str(info_wide))
+  #print(info_wide)
+  #print(do.call(c,info_wide$Target))  
+
+  #make it a dataframe, easier for me to work with
+  info_wide = as.data.frame(info_wide)
+  if(!("Target:"%in%colnames(info_wide))) info_wide[,"Target:"] = NA
+  
+  # Extract the table (if present)
+  table <- entry %>%
+    html_node("table")
+  
+  if (!is.null(table)) {
+    table_df <- tryCatch(
+      {
+        table %>% html_table(fill = TRUE)
+      },
+      error = function(e) {
+        NULL
+      }
+    )
+  } else {
+    table_df <- NULL
+  }
+
+
+  #print(table_df)
+  #print('make df')
+  #make it a dataframe, easier for me to work with
+  if(!is.null(table_df))
+  {
+    table_df = as.data.frame(table_df)
+    table_df[,"Target"] = info_wide[1,"Target:"]
+  }
+  
+  #print('summary df')
+  #make a merged summary table
+  summary_df = data.frame(name=as.character(info_wide[1,1]))
+  summary_df[1,"nobs"] = NA
+  summary_df[1,"nmissing"] = NA
+  summary_df[1,"description"]=vartitle
+  summary_df[1,"target"] = info_wide[1,"Target:"]
+  summary_df[1,"codes"] = paste(table_df[,"Code or Value"],collapse=";;")
+  summary_df[1,"values"] = paste(table_df[,"Value Description"],collapse=";;")
+  summary_df[1,"count"] = paste(table_df[,"Count"],collapse=";;")
+  summary_df[1,"cumulative"] = paste(table_df[,"Cumulative"],collapse=";;")
+  temp = table_df[,"Skip to Item"]
+  summary_df[1,"recode"] = NA
+  summary_df[1,"skipto"] = paste(temp[!is.na(temp)],collapse=";;")
+  summary_df[1,"gated"] = NA
+  summary_df[1,"gated_by"] = NA
+  summary_df[1,"datatype"] = NA
+  #special cases:
+  #if(setequal(c("yes","no","refused","don't know","missing"),tolower(table_df[,"Value Description"]))) 
+  #print("special cases")
+  if(!is.null(table_df))
+  {
+    if(nrow(table_df)==5)
+    {
+      if(all(c("yes","no","refused","don't know","missing")==tolower(table_df[,"Value Description"])))  #order matters
+      {
+        summary_df[1,"datatype"] = "binary"
+        summary_df[1,"recode"] = paste(c(1,0,NA,NA,NA),collapse=";;")
+        summary_df[1,"nobs"] = sum(table_df[1:2,"Count"])
+        summary_df[1,"nmissing"] = sum(table_df[-(1:2),"Count"])
+      } else if(all(c("yes","no","refuse","don't know","missing")==tolower(table_df[,"Value Description"])))  #order matters
+      {
+        summary_df[1,"datatype"] = "binary"
+        summary_df[1,"recode"] = paste(c(1,0,NA,NA,NA),collapse=";;")
+        summary_df[1,"nobs"] = sum(table_df[1:2,"Count"])
+        summary_df[1,"nmissing"] = sum(table_df[-(1:2),"Count"])
+      }
+    } 
+    else if(nrow(table_df)==8)
+    {
+      if(all(c("no difficulty","a little difficulty","much difficulty","unable to do","do not do this activity","refused","don't know","missing")==tolower(table_df[,"Value Description"])))  #order matters
+      {
+        summary_df[1,"datatype"] = "ordinal"
+        summary_df[1,"recode"] = paste(c(0,1/3,2/3,1,NA,NA,NA,NA),collapse=";;")
+        summary_df[1,"nobs"] = sum(table_df[1:4,"Count"])
+        summary_df[1,"nmissing"] = sum(table_df[-(1:4),"Count"])
+      }
+      else if(all(c("no difficulty","some difficulty","much difficulty","unable to do","do not do this activity","refused","don't know","missing")==tolower(table_df[,"Value Description"])))
+      {
+        summary_df[1,"datatype"] = "ordinal"
+        summary_df[1,"recode"] = paste(c(0,1/3,2/3,1,NA,NA,NA,NA),collapse=";;")
+        summary_df[1,"nobs"] = sum(table_df[1:5,"Count"])
+        summary_df[1,"nmissing"] = sum(table_df[-(1:5),"Count"])
+      }
+      else if(all(c("excellent","good","fair","poor","very poor?","refused","don't know","missing")==tolower(table_df[,"Value Description"])))
+      {
+        summary_df[1,"datatype"] = "ordinal"
+        summary_df[1,"recode"] = paste(c(0,1/4,2/4,3/4,1,NA,NA,NA),collapse=";;")
+        summary_df[1,"nobs"] = sum(table_df[1:5,"Count"])
+        summary_df[1,"nmissing"] = sum(table_df[-(1:5),"Count"])
+      }
+    }
+    else if(nrow(table_df)==2)
+    {
+      if(all(c("range of values","missing")==tolower(table_df[,"Value Description"])))  #order matters
+      {
+        summary_df[1,"datatype"] = "numeric"
+        summary_df[1,"nobs"] = sum(table_df[1,"Count"])
+        summary_df[1,"nmissing"] = sum(table_df[-1,"Count"])
+      }
+    }
+    else if(nrow(table_df)==4)
+    {
+      if(all(c("range of values","refused","don't know","missing")==tolower(table_df[,"Value Description"])))  #order matters
+      {
+        summary_df[1,"datatype"] = "numeric"
+        summary_df[1,"recode"] = paste(c("x",NA,NA,NA ),collapse=";;")
+        summary_df[1,"nobs"] = sum(table_df[1,"Count"])
+        summary_df[1,"nmissing"] = sum(table_df[-1,"Count"])
+      }
+    }
+    #else if("range of values"%in%tolower(table_df[,"Value Description"])) # too general
+    #{
+    #  summary_df[1,"datatype"] = "numeric"
+    #  summary_df[1,"nobs"] = sum(table_df[1,"Count"])
+    #}
+  }
+
+  #print('done')
+
+  # Store results in a list
+  #print(info_wide)
+  varname = as.character(info_wide[1,1])
+  results[[varname]] <- list(
+    name=varname,
+    title=vartitle,
+    info = info_wide,
+    table = table_df,
+    summary = summary_df
+  )
+}
+
+#check for gating and merge summaries as you go
+gatedNow = F
+gateUntil = ""
+gate = ""
+summaries = list()
+results[[1]]$summary[,"gated"] = F
+for (i in 1:length(results))
+{
+  #print(results[[i]])
+  if(gatedNow & gateUntil==results[[i]]$name)
+  {
+    gateNow=F
+    gateUntil=""
+    results[[i]]$summary[,"gated"] = F
+  } else if (gatedNow)
+  {
+    results[[i]]$summary[,"gated"] = T
+    results[[i]]$summary[,"gated_by"] = gate
+  } else
+  {
+    results[[i]]$summary[,"gated"] = F
+  }
+  
+  
+  sk = results[[i]]$table[,"Skip to Item"]
+  sk = sk[sk!=""]
+  sk = sk[!is.na(sk)]
+  
+  if(length(sk) > 0)
+  {
+    gatedNow=T
+    gateUntil = sk[1]
+    gate = results[[i]]$name
+  }
+  
+  summaries[[i]] = results[[i]]$summary
+  summaries[[i]][,"order"] = i
+}
+
+summaries = do.call(rbind,summaries)
+
+
+return(list(summaries=summaries,results=results))
+
+# Combine all variable info into a single data frame
+#all_info <- bind_rows(lapply(results, function(x) x$Info), .id = "Variable")
+
+# Combine all tables into a single data frame
+#all_tables <- bind_rows(
+#  lapply(results, function(x) if (!is.null(x$Table)) x$Table else NULL),
+#  .id = "Variable"
+#)
+
+# Save the results to CSV files
+#write.csv(all_info, "NHANES_Codebook_Info.csv", row.names = FALSE)
+
+#if (nrow(all_tables) > 0) {
+#  write.csv(all_tables, "NHANES_Codebook_Tables.csv", row.names = FALSE)
+#}
+
+# Preview the extracted information
+#print("Extracted Variable Information:")
+#print(head(all_info))
+
+#if (nrow(all_tables) > 0) {
+#  print("Extracted Tables:")
+#  print(head(all_tables))
+#}
+
+}
+```
+
+codebooks
+```{r}
+demourls=GetCodebookUrls("Demographics")
+
+democodebook=list()
+for (i in 1:nrow(demourls))
+{
+  democodebook[[i]] = GetCodebook(demourls[i,"url"])$summaries
+  democodebook[[i]][,"years"] = demourls[i,"Years"]
+  democodebook[[i]][,"class"] = demourls[i,"Data File Name"]
+  democodebook[[i]][,"filename"] = demourls[i,"Doc File"]
+  democodebook[[i]][,"url"] = demourls[i,"url"]
+}
+democodebook = do.call(rbind,democodebook)
+
+save=T
+if(save)
+{
+  write.csv(democodebook,sprintf("C:/data/nhanes/nhanes_demo/nhanes_demo_codebook.csv"))
+}
+```
+
+```{r}
+clinicurls=GetCodebookUrls("Questionnaire")
+
+cliniccodebook=list()
+ind = 1
+for (i in 1:nrow(clinicurls))
+{
+  temp = GetCodebook(clinicurls[i,"url"])$summaries
+  if(all(temp=="failed")) next
+  cliniccodebook[[ind]] = temp
+  cliniccodebook[[ind]][,"years"]    = clinicurls[i,"Years"]
+  cliniccodebook[[ind]][,"class"]    = clinicurls[i,"Data File Name"]
+  cliniccodebook[[ind]][,"filename"] = clinicurls[i,"Doc File"]
+  cliniccodebook[[ind]][,"url"]      = clinicurls[i,"url"]
+  ind = ind + 1
+}
+cliniccodebook = do.call(rbind,cliniccodebook)
+
+save=T
+if(save)
+{
+  write.csv(cliniccodebook,sprintf("C:/data/nhanes/nhanes_clinic/nhanes_clinic_codebook.csv"))
+}
+```
+
+```{r}
+laburls=GetCodebookUrlsNew("Laboratory")
+
+labcodebook=list()
+ind = 1
+for (i in 1:nrow(laburls))
+{
+  temp = GetCodebook(laburls[i,"url"])$summaries
+  if(all(temp=="failed")) next
+  labcodebook[[ind]] = temp
+  labcodebook[[ind]][,"years"]    = laburls[i,"Years"]
+  labcodebook[[ind]][,"class"]    = laburls[i,"Data File Name"]
+  labcodebook[[ind]][,"filename"] = laburls[i,"Doc File"]
+  labcodebook[[ind]][,"url"]      = laburls[i,"url"]
+  ind = ind + 1
+}
+labcodebook = do.call(rbind,labcodebook)
+
+save=T
+if(save)
+{
+  write.csv(labcodebook,sprintf("C:/data/nhanes/nhanes_lab/nhanes_lab_codebook.csv"))
+}
+```
+
+update: get dietary data (May 2025)
+```{r}
+dieturls=GetCodebookUrlsNew("Dietary")
+
+dietcodebook=list()
+ind = 1
+for (i in 1:nrow(dieturls))
+{
+  temp = GetCodebook(dieturls[i,"url"])$summaries
+  if(all(temp=="failed")) next
+  dietcodebook[[ind]] = temp
+  dietcodebook[[ind]][,"years"]    = dieturls[i,"Years"]
+  dietcodebook[[ind]][,"class"]    = dieturls[i,"Data File Name"]
+  dietcodebook[[ind]][,"filename"] = dieturls[i,"Doc File"]
+  dietcodebook[[ind]][,"url"]      = dieturls[i,"url"]
+  ind = ind + 1
+}
+dietcodebook = do.call(rbind,dietcodebook)
+
+save=T
+if(save)
+{
+  write.csv(dietcodebook,sprintf("C:/data/nhanes/nhanes_diet/nhanes_diet_codebook.csv"))
+}
+```
+
+demographics
+```{r}
+  download_and_save_files(dest_dir="C:/data/nhanes/nhanes_demo/temp",
+                            final_dir="C:/data/nhanes/nhanes_demo",name="demo",component="Demographics")
+
+  download_and_extract_variable_names(dest_dir="C:/data/nhanes/nhanes_demo",component="Demographics",name="demo")
+```
+
+lab
+```{r}
+  download_and_save_files(dest_dir="C:/data/nhanes/nhanes_lab/temp",
+                            final_dir="C:/data/nhanes/nhanes_lab",name="lab",component="Laboratory")
+
+  download_and_extract_variable_names(dest_dir="C:/data/nhanes/nhanes_lab",component="Laboratory",name="lab")
+```
+
+questionnaire
+```{r}
+  download_and_save_files(dest_dir="C:/data/nhanes/nhanes_clinic/temp",
+                            final_dir="C:/data/nhanes/nhanes_clinic",name="clinic",component="Questionnaire")
+
+
+  download_and_extract_variable_names(dest_dir="C:/data/nhanes/nhanes_clinic",component="Questionnaire",name="clinic")
+
+```
+
+performance / exam
+```{r}
+  download_and_save_files(dest_dir="C:/data/nhanes/nhanes_exam/temp",
+                            final_dir="C:/data/nhanes/nhanes_exam",name="exam",component="Examination")
+
+
+  download_and_extract_variable_names(dest_dir="C:/data/nhanes/nhanes_exam",component="Examination",name="exam")
+
+```
+
+LimitedAccess 
+```{r}
+#  download_and_save_files(dest_dir="C:/data/nhanes/nhanes_misc/temp",
+#                            final_dir="C:/data/nhanes/nhanes_misc",name="misc",component="LimitedAccess")
+
+
+#  download_and_extract_variable_names(dest_dir="C:/data/nhanes/nhanes_misc",component="LimitedAccess",name="misc")
+
+```
+
+diet - added May 2025
+```{r}
+  download_and_save_files(dest_dir="C:/data/nhanes/nhanes_diet/temp",
+                            final_dir="C:/data/nhanes/nhanes_diet",name="diet",component="Dietary")
+
+
+  download_and_extract_variable_names(dest_dir="C:/data/nhanes/nhanes_diet",component="Dietary",name="diet")
+
+```
+
+# old? (not sure???)
+# code books
+
+```{r}
+examurls=GetCodebookUrlsNew("Examination")
+
+examcodebook=list()
+ind = 1
+for (i in 1:nrow(examurls))
+{
+  if(grepl("withdrawn",tolower(examurls[i,"Date Published"])))
+  {
+    warning(sprintf("skipping %s, withdrawn",examurls[i,"Date File Name"]))
+    next
+  }
+  temp = GetCodebook(examurls[i,"url"])$summaries
+  if(all(temp=="failed")) next
+  examcodebook[[ind]] = temp
+  examcodebook[[ind]][,"years"]    = examurls[i,"Years"]
+  examcodebook[[ind]][,"class"]    = examurls[i,"Data File Name"]
+  examcodebook[[ind]][,"filename"] = examurls[i,"Doc File"]
+  examcodebook[[ind]][,"url"]      = examurls[i,"url"]
+  ind = ind + 1
+}
+examcodebook = do.call(rbind,examcodebook)
+
+save=T
+if(save)
+{
+  write.csv(examcodebook,sprintf("C:/data/nhanes/nhanes_exam/nhanes_exam_codebook.csv"))
+}
+```
+
+#old code
+```{r}
+stop("old code")
+```
+
+to add additional info to a tibble
+sample code
+```{r}
+library(tibble)
+
+# Example data: Variable values for individuals
+data <- tibble(
+  PFQ054 = c(1, 2, 1, 9),  # Example responses for "PFQ054"
+  PFQ055 = c(2, 2, 1, 1)   # Example responses for "PFQ055"
+)
+
+# Add metadata as attributes for each column
+attr(data$PFQ054, "Variable Name") <- "PFQ054"
+attr(data$PFQ054, "SAS Label") <- "Need special equipment to walk"
+attr(data$PFQ054, "English Text") <- "Because of a health problem, do you have difficulty walking without using any special equipment?"
+attr(data$PFQ054, "Target") <- "Both males and females 20 YEARS - 150 YEARS"
+
+attr(data$PFQ055, "Variable Name") <- "PFQ055"
+attr(data$PFQ055, "SAS Label") <- "Need special help to climb stairs"
+attr(data$PFQ055, "English Text") <- "Do you have difficulty climbing stairs?"
+attr(data$PFQ055, "Target") <- "Both males and females 30 YEARS - 150 YEARS"
+
+# View the main data
+print(data)
+
+# Access metadata for PFQ054
+print(attributes(data$PFQ054))
+
+```
+
+scraping code book
+example
+```{r}
+library(rvest)
+ 
+ # URL of the codebook
+ url <- "https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/2005/DataFiles/PFQ_D.htm"
+ 
+ # Scrape the page
+ page <- read_html(url)
+ 
+ # Extract table content (variables, descriptions, and value labels)
+ variables <- page %>%
+     html_nodes("table") %>%  # Find all tables
+     .[[1]] %>%              # Assume the first table is what you need
+     html_table(fill = TRUE) # Convert to a data frame
+ 
+ # Preview the variables
+ print(variables)
+```
+
+
+
+
+no longer relevant
+```{r}
+nhanes_years = c(
+  "1999-2000", "2001-2002", "2003-2004", "2005-2006", 
+  "2007-2008", "2009-2010", "2011-2012", "2013-2014", 
+  "2015-2016", "2017-2018" #, "2019-2020" #, "2021-2023" #not on RNHANES
+)
+```
+
+download demographics
+```{r}
+for (i in 1:length(nhanes_years))
+{
+  message("Downloading year: ", nhanes_years[i])
+  download_and_save_files(nhanes_years[i],dest_dir="C:/data/nhanes/nhanes_demo/temp",
+                            final_dir="C:/data/nhanes/nhanes_demo",name="demo",component="Demographics")
+}
+```
+
+download demographics documentation
+```{r}
+for (i in 1:length(nhanes_years))
+{
+  message("Downloading year: ", nhanes_years[i])
+  download_and_extract_variable_names(nhanes_years[i],dest_dir="C:/data/nhanes/nhanes_demo",component="Demographics",name="demo")
+}
+```
+
+download lab
+```{r}
+for (i in 1:length(nhanes_years))
+{
+  message("Downloading year: ", nhanes_years[i])
+  download_and_save_files(nhanes_years[i],dest_dir="C:/data/nhanes/nhanes_lab/temp",
+                            final_dir="C:/data/nhanes/nhanes_lab",name="lab",component="Laboratory")
+}
+```
+
+download lab documentation
+```{r}
+for (i in 1:length(nhanes_years))
+{
+  message("Downloading year: ", nhanes_years[i])
+  download_and_extract_variable_names(nhanes_years[i],dest_dir="C:/data/nhanes/nhanes_lab",component="Laboratory",name="lab")
+}
+```
+
+#questionaire data
+```{r}
+for (i in 1:length(nhanes_years))
+{
+  message("Downloading year: ", nhanes_years[i])
+  download_and_save_files(nhanes_years[i],dest_dir="C:/data/nhanes/nhanes_clinic/temp",
+                            final_dir="C:/data/nhanes/nhanes_clinic",name="clinic",component="Questionnaire")
+}
+```
+
+download questionnaire documentation
+```{r}
+for (i in 1:length(nhanes_years))
+{
+  message("Downloading year: ", nhanes_years[i])
+  download_and_extract_variable_names(nhanes_years[i],dest_dir="C:/data/nhanes/nhanes_clinic",component="Questionnaire",name="clinic")
+}
+```

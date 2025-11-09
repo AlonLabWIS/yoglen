@@ -1,0 +1,225 @@
+---
+title: "NHANES RXD - prescription drugs"
+output: html_notebook
+---
+
+Glen Pridham July 2025
+For preprocessing prescription drugs
+
+HRT drugs from Yoav
+- ANGELIQ TAB 2mg/1mg 28 (, Prescriptions: 65,774)
+- ANGELIQ 29/M TAB 2mg/1mg 84 (, Prescriptions: 460)
+- PROVERA TAB 5mg 24 (, Prescriptions: 109,942)
+- CLIMARA 50 PAT 3.9MG 4 (, Prescriptions: 2,634)
+- CLIMARA 100 PAT 7.8MG BOX 4 (, Prescriptions: 320)
+- ARAGEST TAB 5MG 30 (, Prescriptions: 75,677)
+
+Methods:
+-used Google + ChatGPT + RXDRSD notes to figure out what contains estrogen, progesterone, and what's used for MRT
+```{r}
+gRootName = "nhanes"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+outputDir = "C:/postdoc/nhanes" #analysis directory
+dataDir =  "C:/data/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+source("C:/postdoc/latent_variable_models.R")
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+library(RNHANES)
+
+nhanesDir = "C:/data/nhanes"
+```
+
+```{r}
+drugs = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic.csv",nhanesDir))
+rownames(drugs)=drugs[,"SEQN"]
+```
+#first question: determine every drug in the dataset
+drugs are separated by ;
+RXDDRUG
+RXDRSC1
+RXDRSC2
+RXDRSC3
+```{r}
+un = unique(drugs[,"RXDDRUG"])
+un = un[!is.na(un)]
+un = un[un!=""]
+#check for multidrug users and split
+updates = character()
+for (j in 1:length(un))
+{
+  if(grepl(";",un[j],fixed=TRUE))
+  {
+    new = strsplit(un[j],"; ")[[1]]
+    un[j] = NA #drop
+    for (kk in 1:length(new)) updates = c(updates,new[kk])
+  }
+}
+un=unique(c(un,updates))
+un=un[!is.na(un)]
+
+un = sort(un)
+
+drugList = data.frame(drug=un)
+rownames(drugList)=drugList[,"drug"]
+
+#look up number for each #to do
+
+
+save=F
+if(save)
+{
+  write.csv(drugList,sprintf("%s/data/drug_list_base.csv",outputDir))
+}
+```
+
+codex
+```{r}
+codex = drugs[,c("RXDUSE","RXDDRUG","RXDDRGID","RXDRSC1","RXDRSC2","RXDRSC3","RXDRSD1","RXDRSD2","RXDRSD3","RXDCOUNT")]
+#codex = subset(codex,!is.na(RXDDRUG) & RXDDRUG!="")
+codex = subset(codex,RXDCOUNT>0)
+
+#at least one column must be unique & non-NA
+uniqueLogi = !duplicated(codex[,1])
+uniqueLogi[is.na(uniqueLogi)] = FALSE
+for (j in 1:ncol(codex))
+{
+  NAlogi = is.na(codex[,j])
+  uniqueLogi[!NAlogi] = uniqueLogi[!NAlogi] | !duplicated(codex[!NAlogi,j])
+}
+codex = codex[uniqueLogi,]
+
+codex = codex[sort.list(codex[,"RXDDRUG"]),]
+
+save=F
+if(save)
+{
+  write.csv(codex,sprintf("%s/data/drug_codex_base.csv",outputDir))
+}
+```
+
+recode menopause drugs
+```{r}
+menoDrugs = read.csv(sprintf("%s/data/menopause_drug_list.csv",outputDir))
+```
+
+```{r}
+print("WARNING: I ASSUME HRT ESTROGEN + PROGESTERONE = COMBO HRT (NOT STRICTLY TRUE)")
+warning("I ASSUME HRT ESTROGEN + PROGESTERONE = COMBO HRT (NOT STRICTLY TRUE)")
+drugs[,"estrogen_hrt"]               = NA
+drugs[,"progesterone_hrt"]           = NA
+drugs[,"estrogen_contraceptive"]     = NA
+drugs[,"progesterone_contraceptive"] = NA
+
+for (j in 1:nrow(menoDrugs))
+{
+  drugs[,menoDrugs[j,"drug"]] = NA
+}
+
+for (i in 1:nrow(drugs))
+{
+  if(is.na(drugs[i,"RXDCOUNT"])) #unknown
+  {
+    drugs[i,"estrogen_hrt"]               = NA
+    drugs[i,"progesterone_hrt"]           = NA
+    drugs[i,"estrogen_contraceptive"]     = NA
+    drugs[i,"progesterone_contraceptive"] = NA
+  } else if(drugs[i,"RXDCOUNT"] < .9) #no prescription drugs
+  {
+    drugs[i,"estrogen_hrt"]               = 0
+    drugs[i,"progesterone_hrt"]           = 0
+    drugs[i,"estrogen_contraceptive"]     = 0
+    drugs[i,"progesterone_contraceptive"] = 0
+    for (j in 1:nrow(menoDrugs)) drugs[i,menoDrugs[j,"drug"]] = 0
+  } else
+  {
+    d = drugs[i,"RXDDRUG"]
+    d = strsplit(d,"; ",fixed=TRUE)[[1]] #parse drugs
+    drugs[i,"estrogen_hrt"]               = 0
+    drugs[i,"progesterone_hrt"]           = 0
+    drugs[i,"estrogen_contraceptive"]     = 0
+    drugs[i,"progesterone_contraceptive"] = 0
+    for (j in 1:nrow(menoDrugs)) drugs[i,menoDrugs[j,"drug"]] = 0
+    for (j in 1:nrow(menoDrugs))
+    {
+      #if(grepl(menoDrugs[j,"drug"],d)) #DOESN'T WORK RIGHT (ETHINYL ESTRADIOL AND ESTRADIOL ARE DIFFERENT DRUGS)
+      if((menoDrugs[j,"drug"]%in%d))  #they are taking drug
+      {
+        drugs[i,menoDrugs[j,"drug"]] = 1
+        if(menoDrugs[j,"estrogen"]=="1") #estrogen
+        {
+          if(menoDrugs[j,"for_menopause"]=="1") #for hrt
+          {
+            drugs[i,"estrogen_hrt"] = 1
+          } else if (menoDrugs[j,"contraceptive"]=="1") #for contraception
+          {
+            drugs[i,"estrogen_contraceptive"] = 1
+          } else if (menoDrugs[j,"for_menopause"]=="combo")
+          {
+            drugs[i,"estrogen_hrt"] = 0.49
+          } else if  (menoDrugs[j,"for_menopause"]=="?")
+          {
+            drugs[i,"estrogen_hrt"] = NA
+          } else if  (menoDrugs[j,"estrogen"]=="?")
+          {
+            drugs[i,"estrogen_hrt"] = NA
+            if  (menoDrugs[j,"contraceptive"]=="?") drugs[i,"estrogen_contraceptive"] = NA
+          } else if  (menoDrugs[j,"contraceptive"]=="?")
+          {
+            drugs[i,"estrogen_contraceptive"] = NA
+          }
+        }
+        if(menoDrugs[j,"progesterone"]=="1") #progesterone
+        {
+          if(drugs[i,"estrogen_hrt"] > .4) #assume if they're taking estrogen as well then they're on HRT
+          {
+            drugs[i,"progesterone_hrt"] = 1
+          } else if(menoDrugs[j,"for_menopause"]=="1")
+          {
+            drugs[i,"progesterone_hrt"] = 1
+          } else if (menoDrugs[j,"contraceptive"]=="1") #for contraception
+          {
+            drugs[i,"progesterone_contraceptive"] = 1
+          } else if (menoDrugs[j,"for_menopause"]=="combo")
+          {
+            drugs[i,"progesterone_hrt"] = 0.49
+          } else if  (menoDrugs[j,"for_menopause"]=="?")
+          {
+            drugs[i,"progesterone_hrt"] = NA
+          } else if  (menoDrugs[j,"progesterone"]=="?")
+          {
+            drugs[i,"progesterone_hrt"] = NA
+            if  (menoDrugs[j,"contraceptive"]=="?") drugs[i,"progesterone_contraceptive"] = NA
+          } else if  (menoDrugs[j,"contraceptive"]=="?")
+          {
+            drugs[i,"progesterone_contraceptive"] = NA
+          }
+        } 
+      }
+  }
+  }
+}
+#check for e2 + prog
+drugs[,"both_hrt"] = 1*(drugs[,"estrogen_hrt"] > .1 & drugs[,"progesterone_hrt"]>.1)
+bothlogi = drugs[,"both_hrt"] == 1
+bothlogi[is.na(bothlogi)]= F
+drugs[,"estrogen_hrt"]     = round(drugs[,"estrogen_hrt"])
+drugs[,"progesterone_hrt"] = round(drugs[,"progesterone_hrt"])
+drugs[bothlogi,"estrogen_hrt"]     = 1
+drugs[bothlogi,"progesterone_hrt"] = 1
+```
+
+```{r}
+write.csv(drugs[,c("SEQN","RXDUSE","RXDCOUNT","RXDDRUG","RXDDRGID",
+                   "estrogen_hrt","progesterone_hrt","both_hrt","estrogen_contraceptive","progesterone_contraceptive",menoDrugs[,"drug"],
+                   "RXDRSC1","RXDRSC2","RXDRSC3","RXDRSD1","RXDRSD2","RXDRSD3")],sprintf("%s/data/nhanes_rxd_preproc.csv",outputDir))
+```

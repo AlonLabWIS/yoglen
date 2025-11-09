@@ -1,0 +1,248 @@
+---
+title: "NHANES SLQ - sleep health"
+output: html_notebook
+---
+
+Glen Pridham Mar 2025
+For preprocessing reproductive health variables.
+
+```{r}
+gRootName = "nhanes"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+outputDir = "C:/postdoc/nhanes" #analysis directory
+dataDir =  "C:/data/nhanes"
+nhanesDir =  "C:/postdoc/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+source("C:/postdoc/latent_variable_models.R")
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+library(RNHANES)
+```
+
+
+
+# load in data
+```{r}
+ageCol = "RIDAGEYR"
+sexCol = "RIAGENDR"
+```
+
+#demographics
+```{r}
+demo = read.csv(sprintf("%s/nhanes_demo/nhanes_demo.csv",dataDir))
+rownames(demo)=demo[,"SEQN"]
+```
+
+codex for searching variable types
+```{r}
+codex = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic_vars.csv",dataDir))
+rownames(codex)=codex[,"Variable.Name"]
+```
+
+```{r}
+clinic = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic.csv",dataDir))
+rownames(clinic) = clinic[,"SEQN"]
+clinic[,"age"] = NA
+clinic[,"age"] = demo[rownames(clinic),ageCol]
+clinic[,"survey"] = demo[rownames(clinic),"SDDSRVYR"]
+clinic[,"sex"] = demo[rownames(clinic),sexCol]
+```
+
+```{r}
+slVars = colnames(clinic)[grepl("SLQ",colnames(clinic)) | grepl("SLD",colnames(clinic)) ] #this should be everything... at least in the codex
+sleep = clinic[,c("age","sex","survey",slVars)]
+
+slCodex = codex[colnames(sleep),]
+
+write.csv(slCodex,sprintf("%s/data/slq_codex.csv",outputDir))
+```
+
+now preproc
+```{r}
+library(dplyr)
+age = sleep[,"age"]
+```
+
+```{r}
+AndStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi & l[[i]]
+  }
+  return(logi)
+}
+
+OrStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi | l[[i]]
+  }
+  return(logi)
+}
+```
+
+```{r}
+age = sleep[,"age"]
+#SLD010H	How much sleep do you get (hours)?  - weekends or weekdays #top-coded at 12 hours
+#SLD012	Sleep hours - weekends or weekdays #2015+ #not top-coded
+x = 1.0*sleep[,"SLD010H"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 12        ~ x, #top-coded (~ 1% of people)
+                      x > 13        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+
+sleep[,"sleep_time"] = sleep[,"SLD012"]
+logi = is.na(sleep[,"sleep_time"])
+sleep[logi,"sleep_time"] = x[logi] ####NOTE: x is top-coded at 12h
+
+#SLD013	Sleep hours - weekends  #2017+
+  #TOP AND BOTTOM CODED (3-14 hours; ~1% of people)
+x = 1.0*sleep[,"SLD010H"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 14        ~ x, #top-coded (~ 1% of people)
+                      x > 14        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"sleep_time_weekends"] = x
+
+#SLQ030	How often do you snore?
+  #0: never, ..., 3: frequently
+x = sleep[,"SLQ030"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 3        ~ x/3.0, #top-coded (~ 1% of people)
+                      x > 3        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"snore"] = x
+
+
+#SLQ040	How often do you snort / stop breathing?
+x = sleep[,"SLQ040"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 3        ~ x/3.0, 
+                      x > 3        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"sleep_breathing"] = x
+
+
+#SLQ050	Ever told doctor had trouble sleeping?
+x = sleep[,"SLQ050"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x == 1        ~ 1, 
+                      x == 2        ~0,
+                      x > 3        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"trouble_sleeping"] = x
+
+
+#SLQ060	Ever told by doctor have sleep disorder?
+x = sleep[,"SLQ060"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x == 1        ~ 1, 
+                      x == 2        ~0,
+                      x > 3        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"sleep_disorder"] = x
+
+#SLQ080	How often have trouble falling asleep?
+x = sleep[,"SLQ080"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 4        ~ x/4.0, 
+                      x > 4        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"falling_asleep"] = x
+
+#SLQ090	How often wake up during night?
+x = sleep[,"SLQ090"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 4        ~ x/4.0, 
+                      x > 4        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"wakeup_at_night"] = x
+
+#SLQ100	How often wake up too early in morning?
+x = sleep[,"SLQ100"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 4        ~ x/4.0, 
+                      x > 4        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"wakeup_too_early"] = x
+
+
+#SLQ110	How often feel unrested during the day?
+x = sleep[,"SLQ110"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 4        ~ x/4.0, 
+                      x > 4        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+#sleep[,"wakeup_too_early"] = x #fixed Nov 4 2025
+sleep[,"wakeup_unrested"] = x
+
+#SLQ120	How often feel overly sleepy during day?
+x = sleep[,"SLQ120"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 4        ~ x/4.0, 
+                      x > 4        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+#sleep[,"sleep_breathing"] = x 
+sleep[,"feel_sleepy"] = x #fixed Nov 4 2025
+
+#SLQ130	How often did you not get enough sleep?
+x = sleep[,"SLQ130"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 4        ~ x/4.0, 
+                      x > 4        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"insufficient_sleep"] = x
+
+#SLQ140	How often take pills to help you sleep?
+x = sleep[,"SLQ140"]
+x = dplyr::case_when(
+                      #age < 16      ~ NA_real_, #not needed
+                      x <= 4        ~ x/4.0, 
+                      x > 4        ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+sleep[,"sleeping_pills"] = x
+
+
+#there are several more
+#https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/2005/DataFiles/SLQ_D.htm#SLQ060
+
+
+```
+
+
+#save
+```{r}
+
+write.csv(sleep,sprintf("%s/data/nhanes_sleep.csv",nhanesDir))
+```

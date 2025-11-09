@@ -1,0 +1,869 @@
+---
+title: "NHANES RHQ - reproductive health"
+output: html_notebook
+---
+
+Glen Pridham Mar 2025
+For preprocessing reproductive health variables.
+
+```{r}
+gRootName = "nhanes"
+gRootDir = "/home/glen/R/r_scripts"  #where scripts are
+outputDir = "/home/glen/postdoc/nhanes" #analysis directory
+dataDir =  "/home/glen/data/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+source("/home/glen/postdoc/latent_variable_models.R")
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+library(RNHANES)
+```
+
+
+
+# load in data
+```{r}
+ageCol = "RIDAGEYR"
+sexCol = "RIAGENDR"
+```
+
+#demographics
+```{r}
+demo = read.csv(sprintf("%s/nhanes_demo/nhanes_demo.csv",dataDir))
+rownames(demo)=demo[,"SEQN"]
+```
+
+#exam data
+```{r}
+exam = read.csv(sprintf("%s/nhanes_exam/nhanes_exam.csv",dataDir))
+rownames(exam)=exam[,"SEQN"]
+```
+
+codex for searching variable types
+```{r}
+codex = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic_vars.csv",dataDir))
+rownames(codex)=codex[,"Variable.Name"]
+```
+
+```{r}
+clinic = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic.csv",dataDir))
+rownames(clinic) = clinic[,"SEQN"]
+clinic[,"age"] = NA
+clinic[,"age"] = demo[rownames(clinic),ageCol]
+clinic[,"survey"] = demo[rownames(clinic),"SDDSRVYR"]
+clinic[,"sex"] = demo[rownames(clinic),sexCol]
+```
+
+```{r}
+rhVars = colnames(clinic)[grepl("RHQ",colnames(clinic)) | grepl("RHD",colnames(clinic))] #this should be everything... at least in the codex
+repro = clinic[,c("age","sex","survey",rhVars)]
+
+rhCodex = codex[colnames(repro),]
+
+write.csv(rhCodex,sprintf("%s/data/rhq_codex.csv",outputDir))
+```
+
+now preproc
+```{r}
+library(dplyr)
+age = repro[,"age"]
+```
+
+```{r}
+AndStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi & l[[i]]
+  }
+  return(logi)
+}
+
+OrStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi | l[[i]]
+  }
+  return(logi)
+}
+```
+
+```{r}
+#RHQ010 - Age when first menstrual period occurred #hasn't changed
+#MCQ151 - Age in years at first menstrual period
+#RHD018	Estimated age in months at menarche
+x = 1.0*repro[,"RHQ010"]
+x = dplyr::case_when(
+                      #age < 12      ~ NA_real, #not needed
+                      x == 0         ~  NA_real_,
+                      x <= 20       ~ x, #note: top-coded at 20
+                      x > 20         ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+repro[,"age_menarche"] = x
+
+#regularPeriods=c("RHQ030","RHQ031")
+#RHQ030 regular periods last 12 months
+#RHQ031 at least one period in last 12 months
+y = repro[,"RHQ030"]
+y = dplyr::case_when(
+                      #age < 12      ~ 0,
+                      y == 1        ~ 1,
+                      y == 2        ~ 0,
+                      y > 3         ~ NA_real_,
+                      is.na(y)      ~ NA_real_)
+x = repro[,"RHQ031"]
+x = dplyr::case_when(
+                      #age < 12      ~ 0,
+                      x == 1        ~ 1,
+                      x == 2        ~ 0,
+                      x > 3         ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+yes = OrStack(list(x==1,y==1))
+no = OrStack(list(x==0,y==0)) & !yes
+repro[,"has_periods"]         = NA
+repro[yes,"has_periods"]      = 1
+repro[no,"has_periods"]       = 0
+
+#RHQ040 - Reason not having regular periods
+  #1	Pregnant now	
+  #2	Breast feeding
+  #3	Pregnant in past year	
+  #4	Periods usually irregular
+  #5	Going-gone through menopause  ***menopause
+  #6	Medical conditions-treatments	
+#RHD042 - Reason didn't have period
+  #1	Pregnancy
+  #2	Breast feeding
+  #7	Menopause/Hysterectomy  ***menopause
+  #8	Medical conditions/treatments
+  #9	Other
+#RHD043 - Reason not having regular periods
+  #1	Pregnancy
+  #2	Breast feeding
+  #3	Hysterectomy
+  #7	Menopause/Change of life  ***menopause
+  #9	Other
+repro[,"menopause"] = NA
+meno = OrStack(list(repro[,"RHQ040"] == 5,repro[,"RHD042"] == 7,repro[,"RHD043"] == 7))
+#hysterectomy = repro[,"RHD043"] == 3 #shouldn't affect hormones
+has_periods = repro[,"has_periods"] == 1
+has_periods[is.na(has_periods)] = F
+repro[has_periods,"menopause"] = 0 
+repro[meno,"menopause"] = 1
+
+#assume preg / has child are non-menopausal if unknown
+child = OrStack(list(repro[,"RHQ040"] == 1,repro[,"RHQ040"] == 2,repro[,"RHQ040"] == 3, #preg now, breast feeding or preg last year
+                     repro[,"RHD042"] == 1,repro[,"RHD042"] == 2, #preg or breast feeding
+                     repro[,"RHD043"] == 1,repro[,"RHD043"] == 2)) #preg or breastfeeding
+child[is.na(child)]=F
+repro[child & is.na(repro[,"menopause"]),"menopause"] = 0
+
+#assume young and unknown periods are non-menopausal
+logi = repro[,"age"] < 30 & is.na(repro[,"has_periods"])  & repro[,"sex"]==2
+logi[is.na(logi)] = F
+repro[logi,"menopause"] = 0
+
+#assume old and no periods are menopausal
+logi = repro[,"age"] > 60 & repro[,"has_periods"]==0 & repro[,"sex"]==2
+logi[is.na(logi)] = F
+repro[logi,"menopause"] = 1
+
+
+#assume everybody has had menopause past age 60
+###repro[age > 60, "menopause"] = 1
+#assume over 60 menopause is an error and drop
+#logi = repro[,"age"] > 60 & (repro[,"menopause"]==0 | is.na(repro[,"menopause"]))
+#logi[is.na(logi)] = F
+#repro[logi,"menopause"] = NA
+
+#assume everybody has had menopause past age 65 #saves about 2000 missing values
+#lancet distribution ends at age 60, so 65 probably safe
+repro[age >= 65, "menopause"] = 1
+
+
+#everPreg=c("RHD130","RHQ131")
+#RHD130 ever pregnant
+#RHQ131 ever pregnant
+y = repro[,"RHD130"]
+y = dplyr::case_when(
+                      #age < 20      ~ 0,
+                      y == 1        ~ 1,
+                      y == 2        ~ 0,
+                      y > 3         ~ NA_real_,
+                      is.na(y)      ~ NA_real_)
+x = repro[,"RHQ131"]
+x = dplyr::case_when(
+                      #age < 20      ~ 0,
+                      x == 1        ~ 1,
+                      x == 2        ~ 0,
+                      x > 3         ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+everPreg = OrStack(list(x==1,y==1))
+neverPreg = OrStack(list(x==0,y==0)) & !everPreg
+repro[,"ever_preg"]         = NA
+repro[everPreg,"ever_preg"]  = 1
+repro[neverPreg,"ever_preg"] = 0
+
+
+#pregNow=c("RHD143","RHQ141")
+#RHQ140 - Think that you are pregnant now?
+y = repro[,"RHQ140"]
+y = dplyr::case_when(
+                      age < 12      ~ 0,
+                      age > 59      ~ 0,
+                      y == 1        ~ 1,
+                      y == 2        ~ 0,
+                      y > 3         ~ NA_real_,
+                      is.na(y)      ~ NA_real_)
+x = repro[,"RHQ141"]
+x = dplyr::case_when(
+                      age < 12      ~ 0,
+                      age > 59      ~ 0,
+                      x == 1        ~ 1,
+                      x == 2        ~ 0,
+                      x > 3         ~ NA_real_,
+                      is.na(x)      ~ NA_real_)
+z = repro[,"RHD143"]
+z = dplyr::case_when(
+                      age < 12      ~ 0,
+                      age > 59      ~ 0,
+                      z == 1        ~ 1,
+                      z == 2        ~ 0,
+                      z > 3         ~ NA_real_,
+                      is.na(z)      ~ NA_real_)
+preg = OrStack(list(repro[,"RHQ040"] == 1,repro[,"RHD042"] == 1,repro[,"RHD043"] == 1))
+yes = OrStack(list(x==1,y==1,z==1))
+no = OrStack(list(x==0,y==0,z==0)) & !yes
+repro[,"preg_now"]          = NA
+repro[preg,"preg_now"]      = 1
+repro[yes,"preg_now"]       = 1
+repro[no,"preg_now"]        = 0
+
+#
+#RHQ150 - What month of pregnancy are you in? 1-10
+#RHQ151 - What month of pregnancy are you in? 1-9
+#RHD152 - What month of pregnancy are you in? 1-9
+y = repro[,"RHQ150"]
+y = dplyr::case_when(
+                      y > 12        ~ NA_real_,
+                      TRUE          ~ y)
+x = repro[,"RHQ151"]
+x = dplyr::case_when(
+                      x > 12        ~ NA_real_,
+                      TRUE          ~ x)
+z = repro[,"RHD152"]
+z = dplyr::case_when(
+                      z > 12        ~ NA_real_,
+                      TRUE          ~ z)
+repro[,"pregMonth"] = y
+repro[is.na(repro[,"pregMonth"]),"pregMonth"] = x[is.na(repro[,"pregMonth"])]
+repro[is.na(repro[,"pregMonth"]),"pregMonth"] = z[is.na(repro[,"pregMonth"])]
+
+#RHQ060 - Age at last menstrual period
+#top and bottom coded (19-60)
+col = "RHQ060"
+x = 1*repro[,col]
+repro[,"age_last_period"] = dplyr::case_when(
+                      age < 12      ~ NA_real_,
+                      x <= 60      ~ x,
+                      x >= 65        ~ NA_real_, #assume these are formatting errors
+                      x > 85        ~ NA_real_,
+                      is.na(x)      ~ NA_real_,
+                      is.na(age)    ~ NA_real_)
+
+repro[,"age_menopause"] = NA
+meno = repro[,"menopause"] == 1
+meno[is.na(meno)] = F
+repro[meno,"age_menopause"] = repro[meno,"age_last_period"]
+
+
+
+pregNow = repro[,"preg_now"] == 1
+pregNow[is.na(pregNow)] = F
+#birth control pill
+#RHQ420	Ever taken birth control pills?
+col = "RHQ420"
+x = 1*repro[,col]
+repro[,"ever_birth_control_pills"] = dplyr::case_when(
+                      age < 12      ~ NA_real_,
+                      x == 1        ~ 1,
+                      x == 2        ~ 0, 
+                      x > 3         ~ NA_real_,
+                      is.na(x)      ~ NA_real_,
+                      is.na(age)    ~ NA_real_)
+
+neverBirthControl = repro[,"ever_birth_control_pills"] == 0
+neverBirthControl[is.na(neverBirthControl)] = FALSE
+
+#RHD440	Taking birth control pills now?
+col = "RHD440"
+x = 1*repro[,col]
+repro[,"birth_control_pills_now"] = dplyr::case_when(
+                      neverBirthControl ~ 0,
+                      age < 12          ~ NA_real_,
+                      x == 1            ~ 1,
+                      x == 2            ~ 0, 
+                      x > 3             ~ NA_real_,
+                      pregNow            ~ 0, #can't be pregnant and on the pill
+                      is.na(x)          ~ NA_real_,
+                      is.na(age)        ~ NA_real_)
+
+#RHQ430	Age when started taking birth pills
+col = "RHQ430"
+x = 1*repro[,col]
+repro[,"age_started_birth_control_pills"] = dplyr::case_when(
+                      neverBirthControl ~ NA_real_, #not relevant
+                      age < 12          ~ NA_real_,
+                      x < 76           ~ x, 
+                      x > 76           ~ NA_real_,
+                      is.na(x)          ~ NA_real_,
+                      is.na(age)        ~ NA_real_)
+
+#RHD451	Age stopped taking birth control pills
+col = "RHD451"
+x = 1*repro[,col]
+repro[,"age_stopped_birth_control_pills"] = dplyr::case_when(
+                      neverBirthControl ~ NA_real_, #not relevant
+                      age < 12          ~ NA_real_,
+                      x < 76           ~ x, 
+                      x > 76           ~ NA_real_,
+                      is.na(x)          ~ NA_real_,
+                      is.na(age)        ~ NA_real_)
+
+#RHQ460Q	How long taking birth control pills
+col = "RHQ460Q"
+x = 1*repro[,col]
+repro[,"how_long_taking_birth_control_pills_nounits"] = dplyr::case_when(
+                      neverBirthControl ~ NA_real_, #not relevant
+                      is.na(x)     ~ NA_real_,
+                      x <= 76      ~ as.numeric(x),
+                      x > 76       ~ NA_real_,
+                      TRUE         ~ NA_real_
+                      )
+
+col = "RHQ460U" #units
+nm = "how_long_taking_birth_control_pills_units"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    x == 1             ~ 1/12,
+    x == 2             ~ 1,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+
+repro[,"how_long_taking_birth_control_pills"] = repro[,"how_long_taking_birth_control_pills_nounits"]*repro[,"how_long_taking_birth_control_pills_units"]
+
+#RHD470	Brand name of contraceptives
+
+c("ever_birth_control_pills","birth_control_pills_now","age_started_birth_control_pills","age_stopped_birth_control_pills","how_long_taking_birth_control_pills")
+```
+
+```{r}
+neverPreg = repro[,"ever_preg"]  ==0
+neverPreg[is.na(neverPreg)] = F
+
+#RHQ162 - During pregnancy, told you have diabetes
+
+#RHQ160 - How many times have been pregnant?
+col = "RHQ160"
+nm = "times_preg"
+x = 1.0*repro[,col]
+repro[,nm] = dplyr::case_when(
+                      neverPreg     ~ 0,  #never been pregnant
+                      is.na(x)      ~ NA_real_,
+                      age < 12      ~ 0,
+                      x <= 70       ~ x,
+                      x > 70        ~ NA_real_,
+                      TRUE         ~ NA_real_)
+
+#RHQ166	How many vaginal deliveries?
+
+#RHQ169	How many cesarean deliveries?
+
+
+#RHD167 Total number of deliveries had #not all waves have this!
+col = "RHD167"
+nm = "times_preg"
+x = 1.0*repro[,col]
+repro[,nm] = dplyr::case_when(
+                      neverPreg     ~ 0,  #never been pregnant
+                      is.na(x)      ~ NA_real_,
+                      age < 12      ~ 0,
+                      x <= 70       ~ x,
+                      x > 70        ~ NA_real_,
+                      TRUE         ~ NA_real_)
+
+
+
+#RHQ171	How many deliveries live birth result?
+col="RHQ171"
+x = 1.0*repro[,col]
+liveBirths = dplyr::case_when(
+                      age < 12            ~ 0.0,
+                      neverPreg           ~ 0.0, #never pregnant
+                      x <= 12              ~ x,
+                      x > 70              ~ NA_real_,
+                      is.na(x)            ~ NA_real_)
+  
+#RHD170 number of pregnancies resulting in live births
+col="RHD170"
+x = 1.0*repro[,col]
+liveBirths2 = dplyr::case_when(
+                      age < 12            ~ 0,
+                      neverPreg           ~ 0, #never pregnant
+                      x <= 12              ~ x, #0-11+
+                      x > 70              ~ NA_real_,
+                      is.na(x)            ~ NA_real_)
+liveBirths[is.na(liveBirths)] = liveBirths2[is.na(liveBirths)]
+repro[,"parity"] = liveBirths
+
+
+
+#RHQ163	Age told you had diabetes while pregnant
+
+#RHQ180 - Age at first live birth
+col = "RHQ180"
+nm = "age_first_birth"
+x = 1.0*repro[,col]
+repro[,nm] = dplyr::case_when(
+                      age < 12      ~ 0,
+                      x <= 150       ~ x,
+                      x > 150         ~ NA_real_,
+                      is.na(x)           ~ NA_real_)
+
+
+#RHQ190 - Age at last live birth
+col = "RHQ190"
+nm = "age_last_birth"
+x = 1.0*repro[,col]
+repro[,nm] = dplyr::case_when(
+                      age < 12      ~ 0,
+                      x <= 150       ~ x,
+                      x > 150         ~ NA_real_,
+                      is.na(x)           ~ NA_real_)
+
+```
+
+```{r}
+
+#ever use female hormones (excludes birth control)
+col = "RHQ540"
+nm = "used_hrt"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+                      age < 20      ~ 0,
+                      x == 1             ~ 1,
+                      x == 2             ~ 0,
+                      x > 2              ~ NA_real_,
+                      is.na(x)           ~ NA_real_)
+#repro[,"RHQ540"] = dplyr::recode(repro[,"RHQ540"],
+#                `1` = 1,
+#                `2` = 0,
+#                `77` = NA_real_,
+#                `99` = NA_real_)
+
+neverHRT = repro[,"used_hrt"] == 0
+neverHRT[is.na(neverHRT)] = F
+
+#still having period when started hormones
+col = "RHQ550"
+nm = "hrt_pre_meno"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    neverHRT           ~ 0,
+    x == 1             ~ 1,
+    x == 2             ~ 0,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+#used estrogen-only pills
+col = "RHQ554"
+nm = "estrogen_hrt"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    neverHRT           ~ 0,
+    x == 1             ~ 1,
+    x == 2             ~ 0,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+#age started estrogen-only pills
+col = "RHQ556"
+nm = "age_estrogen_hrt"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+  is.na(x)     ~ NA_real_,
+  x <= 85      ~ as.numeric(x),
+  x > 85       ~ NA_real_,
+  TRUE         ~ NA_real_
+)
+
+
+#taking estrogen-only pills now
+col = "RHQ558"
+nm = "estrogen_hrt_now"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    neverHRT           ~ 0,
+    x == 1             ~ 1,
+    x == 2             ~ 0,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+#how long taking estrogen-only pills?
+col = "RHQ560Q"
+nm = "time_on_estrogen_hrt_nounits"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+  neverHRT           ~ 0.0,
+  is.na(x)     ~ NA_real_,
+  x <= 76      ~ as.numeric(x),
+  x > 76       ~ NA_real_,
+  TRUE         ~ NA_real_
+)
+
+#RHQ560U - Unit of measure: months, years -estrogen
+col = "RHQ560U" #units
+nm = "time_on_estrogen_units"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    x == 1             ~ 1/12,
+    x == 2             ~ 1,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+repro[,"time_on_estrogen_hrt"] = repro[,"time_on_estrogen_hrt_nounits"]*repro[,"time_on_estrogen_units"]
+
+
+#used progestin-only pills
+col = "RHQ562"
+nm = "progestin_hrt"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    neverHRT           ~ 0,
+    x == 1             ~ 1,
+    x == 2             ~ 0,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+#age started progestin-only pills
+col = "RHQ564"
+nm = "age_progestin_hrt"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+  is.na(x)     ~ NA_real_,
+  x <= 85      ~ as.numeric(x),
+  x > 85       ~ NA_real_,
+  TRUE         ~ NA_real_
+)
+
+
+#taking progestin-only pills now
+col = "RHQ566"
+nm = "progestin_hrt_now"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    neverHRT           ~ 0,
+    x == 1             ~ 1,
+    x == 2             ~ 0,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+#how long taking progestin-only pills?
+col = "RHQ560Q"
+nm = "time_on_progestin_hrt_nounits"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+  is.na(x)     ~ NA_real_,
+  neverHRT           ~ 0,
+  x <= 76      ~ as.numeric(x),
+  x > 76       ~ NA_real_,
+  TRUE         ~ NA_real_
+)
+
+#RHQ560U - Unit of measure: months, years - progestin
+col = "RHQ560U"
+nm = "time_on_progestin_hrt_units" #units 
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    x == 1             ~ 1/12,
+    x == 2             ~ 1,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+repro[,"time_on_progestin_hrt"] = repro[,"time_on_progestin_hrt_nounits"]*repro[,"time_on_progestin_hrt_units"]
+
+
+#used estrogen + progestin combo pills
+col = "RHQ570"
+nm = "combo_hrt"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    neverHRT           ~ 0,
+    x == 1             ~ 1,
+    x == 2             ~ 0,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+#comboe or estrogen + progestin separately
+repro[,"both_hrt"] =  repro[,"combo_hrt"]
+logi = repro[,"estrogen_hrt"] == 1 & repro[,"progestin_hrt"] == 1
+logi[is.na(logi)] = F
+repro[logi,"both_hrt"] = 1
+
+#age started estrogen + progestin combo pills
+col = "RHQ572"
+nm  = "age_combo_hrt"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+  is.na(x)     ~ NA_real_,
+  x <= 85      ~ as.numeric(x),
+  x > 85       ~ NA_real_,
+  TRUE         ~ NA_real_
+)
+
+
+#taking estrogen + progestin combo pills now
+col = "RHQ574"
+nm = "combo_hrt_now"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    neverHRT           ~ 0,
+    x == 1             ~ 1,
+    x == 2             ~ 0,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+#how long taking estrogen + progestin combo pills?
+col = "RHQ576Q"
+nm = "time_on_combo_hrt_nounits"
+x = repro[,col]
+repro[,nm] = dplyr::case_when(
+  neverHRT           ~ 0,
+  is.na(x)     ~ NA_real_,
+  x <= 76      ~ as.numeric(x),
+  x > 76       ~ NA_real_,
+  TRUE         ~ NA_real_
+)
+
+#RHQ560U - Unit of measure: months, years - progestin
+col = "RHQ576U" #units 
+nm = "time_on_combo_hrt_units"
+x = repro[,col]
+repro[nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    x == 1             ~ 1/12,
+    x == 2             ~ 1,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+repro[,"time_on_combo_hrt"] = repro[,"time_on_combo_hrt_nounits"]*repro[,"time_on_combo_hrt_units"]
+
+t = repro[,"time_on_combo_hrt"]
+t[is.na(t)] = repro[is.na(t),"time_on_estrogen_hrt"]
+t[is.na(t)] = repro[is.na(t),"time_on_progestin_hrt"]
+neverused = repro[,"used_hrt"] == 0
+neverused[is.na(neverused)] = F
+t[neverused] = 0
+repro[,"time_on_hrt"] = t
+
+pill = rep(NA,nrow(repro))
+pill[neverused] = "none"
+logi = repro[,"combo_hrt_now"] == 1
+logi[is.na(logi)] = F
+pill[logi] = "combo"
+logi = repro[,"progestin_hrt_now"] == 1
+logi[is.na(logi)] = F
+pill[logi] = "progestin"
+logi = repro[,"estrogen_hrt_now"] == 1
+logi[is.na(logi)] = F
+pill[logi] = "estrogen"
+#weird edge cases - they said they are taking more than one
+logi = repro[,"estrogen_hrt_now"] == 1 & repro[,"progestin_hrt_now"] == 1  #some people take both this way????
+logi[is.na(logi)] = F
+pill[logi] = "both"
+logi = repro[,"estrogen_hrt_now"] == 1 & repro[,"combo_hrt_now"] == 1  #some people take both this way????
+logi[is.na(logi)] = F
+pill[logi] = "estro_and_combo"
+logi = repro[,"RHQ566"] == 1 & repro[,"combo_hrt_now"] == 1  #some people take both this way????
+logi[is.na(logi)] = F
+pill[logi] = "progestin_and_combo"
+logi =  repro[,"estrogen_hrt_now"] == 1 & repro[,"progestin_hrt_now"] == 1 & repro[,"combo_hrt_now"] == 1  #some people take them all!!!
+logi[is.na(logi)] = F
+pill[logi] = "all"
+repro[,"hrtPillFull"] = pill
+logi = pill %in% c("all","estro_and_combo","progestin_and_combo","both")
+logi[is.na(logi)] = F
+pill[logi] = "combo"
+repro[,"hrtPill"] = pill #simplified
+
+#new variable to combine combo pill + both pills separately
+repro[,"both_hrt_now"] = 1*(pill=="combo")
+```
+
+check encoding
+some people used multiple pills! (???)
+
+```{r}
+xtabs(~hrtPillFull+combo_hrt_now,repro) #combo
+xtabs(~hrtPillFull+progestin_hrt_now,repro) #progestin
+xtabs(~hrtPillFull+estrogen_hrt_now,repro) #estrogen
+xtabs(~hrtPillFull+hrtPill,repro) #simplified
+
+table(subset(repro,hrtPill=="estrogen")[,"survey"]) #so few!
+```
+
+women who had a hysterectomy but not both ovaries removed:
+```{r}
+#RHQ070 age of last menstrual period
+#RHD280 - Had a hysterectomy?
+#RHQ291 - Age when had hysterectomy
+#RHQ305 - Had both ovaries removed?
+hist(subset(repro,RHD280==1 & RHQ305==2 & RHQ291 < 100)[,"RHQ291"])
+#num women:
+hyst = repro[,"RHD280"]
+hyst = dplyr::case_when(
+    hyst == 1 ~ 1,
+    hyst == 2 ~ 0,
+    hyst > 2 ~ NA_real_)
+ooph = repro[,"RHQ305"]
+ooph = dplyr::case_when(
+    ooph == 1 ~ 1,
+    ooph == 2 ~ 0,
+    ooph > 2 ~ NA_real_)
+print(sprintf("frequency of hysterectomies: %.0f%% (%.0f/%.0f)",100*mean(hyst,na.rm=T),sum(hyst==1,na.rm=T),sum(!is.na(hyst))))
+print(sprintf("frequency of hysterectomies & not double oophorectomy: %.0f%% (%.0f/%.0f)",100*mean(hyst == 1 & ooph == 0,na.rm=T),sum(hyst == 1 & ooph == 0,na.rm=T),sum(!is.na(hyst) & !is.na(ooph))))
+logi = hyst==1 & ooph==0
+logi[is.na(logi)]=F
+print(sprintf("women with hysterectomies & not double oophorectomy & under age 50 %.1f%% (%.0f/%.0f)",100*mean(repro[logi,"age"] < 50,na.rm=T),sum(repro[logi,"age"] < 50,na.rm=T),sum(logi)))
+print(sprintf("women with hysterectomies & not double oophorectomy & under age 60 %.1f%% (%.0f/%.0f)",100*mean(repro[logi,"age"] < 60,na.rm=T),sum(repro[logi,"age"] < 60,na.rm=T),sum(logi)))
+print(sprintf("age distribution of women with hysterectomies & not double oophorectomy"))
+print(quantile(repro[logi,"age"],probs=seq(0,.50,by=.1),na.rm=T))
+
+#factor of .5 because age 50 is median
+notNA = !is.na(hyst) & !is.na(ooph)
+print(sprintf("estimated number of women that are pre-menopausal and had a hysterectomy: %.1f%% +/- %.1f (%.0f/%.0f x 50%%)",.5*100*mean(logi[notNA] & repro[notNA,"age"] < 50,na.rm=T),.5*100*SEM(logi[notNA] & repro[notNA,"age"] < 50,na.rm=T),sum(logi[notNA] & repro[notNA,"age"] < 50,na.rm=T),sum(notNA)))
+```
+
+```{r}
+#RHQ300 had at least one ovary removed
+#RHQ310	Were both ovaries removed or only one?
+#RHQ320	Both ovaries removed at same time?
+#RHQ305 both ovaries removed
+nm = "ovaries_removed"
+x = repro[,"RHQ300"]
+y = repro[,"RHQ310"]
+x = dplyr::case_when(
+    age < 20      ~ 0,
+    x == 2        ~ 0,
+    x == 1 & y==1 ~ 1, #both ovaries removed
+    x == 1 & y==2 ~ 0, #one ovary removed
+    x == 1 & is.na(y) ~ NA_real_,
+    x == 1 & y > 2    ~ NA_real_,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+
+
+both = repro[,"RHQ305"]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    both == 1             ~ 1,
+    both == 2             ~ 0,
+    both > 2              ~ NA_real_,
+    is.na(both)           ~ NA_real_)
+logi = is.na(repro[,nm])
+repro[logi,nm] = x[logi]
+
+
+nm = "single_ovary_removed"
+x = repro[,"RHQ300"]
+y = repro[,"RHQ310"]
+repro[,nm] = dplyr::case_when(
+    age < 20      ~ 0,
+    x == 2        ~ 0,
+    x == 1 & y==1 ~ 0, #both ovaries removed
+    x == 1 & y==2 ~ 1, #one ovary removed
+    x == 1 & is.na(y) ~ NA_real_,
+    x == 1 & y > 2    ~ NA_real_,
+    x > 2              ~ NA_real_,
+    is.na(x)           ~ NA_real_)
+
+
+
+
+#update menopause - anyone with both ovaries removed is menopausal
+logi = repro[,"ovaries_removed"] == 1
+logi[is.na(logi)] = F
+repro[logi,"menopause"] = 1
+```
+
+check old women who still aren't menopausal - what's their deal?
+RHQ030: regular periods during past 12 months
+RHQ031: any period during past 12 months
+they say they're having regular periods, I am skeptical
+```{r}
+subset(repro,!is.na(menopause) & menopause==0 & age > 56)[,c("age","age_menarche","has_periods","menopause","preg_now","used_hrt","hrtPill","ovaries_removed","single_ovary_removed","RHQ030","RHQ031","RHQ040","RHD042","RHD043")]
+```
+
+menopause survival:
+```{r}
+start  = rep(0,nrow(repro))
+stop   = repro[,"age_menopause"]
+status = repro[,"menopause"]
+logi = status==0
+logi[is.na(logi)] = F
+stop[logi] = repro[logi,"age"]
+#assume any non-menopause past maxAge is an error
+#stop[stop > maxAge] = maxAge
+  
+#combined:
+s = Surv(stop,status)
+
+#healthy only:
+logi = repro[,"ovaries_removed"] == 1 #will drop
+logi[is.na(logi)]=F
+sh = Surv(stop[!logi],status[!logi])
+
+#unhealthy only:
+sun = Surv(stop[logi],status[logi])
+
+
+
+plot(s,main="Menopause")
+lines(survfit(sh~1),col=2)
+lines(survfit(sun~1),col=3)
+legend("bottomleft",c("All","Healthy","Oophorectomies"),col=1:3,lty=1)
+```
+
+#save
+```{r}
+write.csv(repro,sprintf("%s/data/nhanes_repro.csv",outputDir))
+```

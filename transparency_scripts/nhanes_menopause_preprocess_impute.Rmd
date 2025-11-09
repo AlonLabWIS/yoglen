@@ -1,0 +1,2455 @@
+---
+title: "NHANES menopause preprocessing and imputation"
+output: html_notebook
+---
+
+Glen June 2025
+preprocessing and imputing
+
+Major problem: don't analyze the imputed values, I don't trust them.
+  -I can't seem to get the imputed values to look sane and trustworthy. 
+  -I think the issue could be that I have to completely separate before and after menopause (which can't be done unless I drop the unknown menopause status').
+
+to do / problems:
+-you have some redundant variables e.g. FIVars & adls
+
+#steps:
+#1. noisy model for different variables
+#   z = x or y #x is primary contributor
+#   z = x + noise or y
+# impute x, z and i=indicator
+#2. combine noisy model vars with binary & other vars
+#   -survival use what? 1 year and 10 year survival?
+#3. impute everybody together
+
+special cases:
+-hematocrit (LBXHCT) name was reused and is junk for 2013-2014, 2015-2016 & 2017-2018 (surveys: 14,16,18)
+
+```{r}
+gRootName = "menopause"
+gRootDir = "/home/glen/R/r_scripts"  #where scripts are
+
+
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+
+
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+#library(RNHANES)
+library(cowplot)
+#library(survPen)
+library(pROC)
+library(ranger)
+
+outputDir = "/home/glen/postdoc/menopause" #analysis directory
+nhanesDir =  "/home/glen/postdoc/nhanes"
+dataDir =  "/home/glen/data/nhanes"
+
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+```
+
+
+
+```{r}
+codex = read.csv(sprintf("%s/data/nhanes_preproc_codex.csv",nhanesDir),row.names=1)
+rownames(codex)=codex[,"name"]
+
+
+```
+
+```{r}
+labVars = subset(codex,group=="lab")[,"name"]
+#add blood stuff
+labVars = c(labVars,c("pulse","BPXDI","BPXSY"))
+
+#must have at least a few values
+#labVars = labVars[apply(!impm[["where"]],2,sum) > 10]
+#labVars = labVars[apply(!is.na(Xm),2,sum) > 10]
+
+#drop NAs (???)
+labVars = labVars[!is.na(labVars)]
+
+#must be in X!
+#labVars = intersect(labVars,colnames(X))
+```
+
+```{r}
+fiCodex = read.csv(sprintf("%s/clinic_fivar.csv",nhanesDir),row.names=1)
+
+fiVar0 = subset(fiCodex,basic_fi)[,"name"]
+fiVar0 = unique(fiVar0)
+
+#fiVar = subset(fiCodex,basic_fi)[,"name"] #only takes one ADL difficulty level (any)
+fiVar = subset(fiCodex,intermediate_fi)[,"name"] #takes all ADL difficulty levels
+
+#add balance?
+#fiVar = c(fiVar,sprintf("BAXPFC%d",1:4))
+
+fiVar = unique(fiVar)
+
+#subtract survival
+fiVarNoS = fiVar[fiCodex[fiVar,"pool"] !="death"]
+```
+
+
+lab data
+```{r}
+lab = read.csv(sprintf("%s/nhanes_lab/nhanes_lab.csv",dataDir))
+rownames(lab)=lab[,"SEQN"]
+```
+
+clinical data
+```{r}
+clinic = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic.csv",dataDir))
+rownames(clinic) = clinic[,"SEQN"]
+
+```
+
+demographics - for weights
+ChatGPT says don't do this if you're comparing studies
+```{r}
+demo = read.csv(sprintf("%s/nhanes_demo/nhanes_demo.csv",dataDir))
+rownames(demo) = demo[,"SEQN"]
+#demoCodex = read.csv(sprintf("%s/nhanes_demo/nhanes_demo_codebook.csv",dataDir))
+```
+
+
+```{r}
+mf = readRDS(sprintf("%s/data/nhanes_preprocessed_imputed_pmm_logreg_females.rds",nhanesDir))
+X = mf[["data"]]
+#X[,"WTINT2YR"] = demo[rownames(X),"WTINT2YR"] #interview weights
+#X[,"WTMEC2YR"] = demo[rownames(X),"WTMEC2YR"] #lab weights
+X0 = X
+X[,colnames(lab)] = lab[rownames(X),] #I don't want the preprocessed data for this analysis
+rm(mf)
+
+Xmi = readRDS(sprintf("%s/nhanes_menopause_imputed.rds",outputDir)) #imputed menopause status and age
+for (i in 1:length(Xmi)) Xmi[[i]][,"time_since_menopause"] = Xmi[[i]][,"age"] - Xmi[[i]][,"age_menopause"]
+
+#seqn gets dropped sometimes..
+X[,"SEQN"] = rownames(X)
+
+
+X[,"fi"] = apply(X[,fiVar0],1,mean,na.rm=T)
+
+x = X[,"SDDSRVYR"]
+X[,"survey_year"] = dplyr::case_when(
+                      x == 1        ~ 1999.5,
+                      x == 2        ~ 2001.5,
+                      x == 3        ~ 2003.5,
+                      x == 4        ~ 2005.5,
+                      x == 5        ~ 2007.5,
+                      x == 6        ~ 2009.5,
+                      x == 7        ~ 2011.5,
+                      x == 8        ~ 2013.5,
+                      x == 9        ~ 2015.5,
+                      x == 10       ~ 2017.5,
+                      x == 12       ~ 2022,
+                      x == 66       ~ 2018.5,
+                      is.na(x)      ~ NA_real_)
+X[,"survey_year"] = X[,"survey_year"] - 1999.5
+X[,"surveyf"] = ordered(X[,"SDDSRVYR"])
+
+
+
+#replace lab data with original stuff
+#X[,colnames(lab)] = lab[rownames(X),] #commented out July 2025
+
+X[,"PP"]  = X[,"BPXSY"] - X[,"BPXDI"]
+X[,"MAP"] = X[,"BPXDI"] + X[,"PP"]/3
+
+#drop hematocrit
+#hematocrit values are garbage for years 2013-2017
+#why? because they reused a variable name:
+  #LBXHCT: Hydroxycotinine, Serum (ng/mL) #2013-2014, 2015-2016 & 2017-2018
+  #LBXHCT: Hematocrit (%)
+#ggplot(X,aes(x=ordered(survey_year+1999.5),y=LBXHCT))+geom_boxplot()+scale_y_log10()
+X[,"LBXHCT"] =dplyr::case_when(
+                      round(X[,"survey_year"]) == 14 ~ NA_real_,
+                      round(X[,"survey_year"]) == 16 ~ NA_real_,
+                      round(X[,"survey_year"]) == 18 ~ NA_real_,
+                      TRUE     ~ X[,"LBXHCT"])
+
+```
+
+males
+```{r}
+mm = readRDS(sprintf("%s/data/nhanes_preprocessed_imputed_pmm_logreg_males.rds",nhanesDir))
+Xm = mm[["data"]]
+#Xm[,"WTINT2YR"] = demo[rownames(Xm),"WTINT2YR"] #interview weights
+#Xm[,"WTMEC2YR"] = demo[rownames(Xm),"WTMEC2YR"] #lab weights
+Xm0 = Xm
+Xm[,colnames(lab)] = lab[rownames(Xm),] #I don't want the preprocessed data for this analysis
+rm(mm)
+Xmmi = readRDS(sprintf("%s/nhanes_menopause_males_imputed.rds",outputDir)) #imputed menopause status and age
+for (i in 1:length(Xmmi)) Xmmi[[i]][,"time_since_menopause"] = Xmmi[[i]][,"age"] - Xmmi[[i]][,"age_menopause"]
+
+#seqn gets dropped sometimes..
+Xm[,"SEQN"] = rownames(Xm)
+
+Xm[,"fi"] = apply(Xm[,fiVar0],1,mean,na.rm=T)
+
+x = Xm[,"SDDSRVYR"]
+Xm[,"survey_year"] = dplyr::case_when(
+                      x == 1        ~ 1999.5,
+                      x == 2        ~ 2001.5,
+                      x == 3        ~ 2003.5,
+                      x == 4        ~ 2005.5,
+                      x == 5        ~ 2007.5,
+                      x == 6        ~ 2009.5,
+                      x == 7        ~ 2011.5,
+                      x == 8        ~ 2013.5,
+                      x == 9        ~ 2015.5,
+                      x == 10       ~ 2017.5,
+                      x == 12       ~ 2022,
+                      x == 66       ~ 2018.5,
+                      is.na(x)      ~ NA_real_)
+Xm[,"survey_year"] = Xm[,"survey_year"] - 1999.5
+Xm[,"surveyf"] = ordered(Xm[,"SDDSRVYR"])
+
+#replace lab data with original stuff
+#Xm[,colnames(lab)] = lab[rownames(Xm),] #commented out July 2025
+
+Xm[,"PP"]  = Xm[,"BPXSY"] - Xm[,"BPXDI"]
+Xm[,"MAP"] = Xm[,"BPXDI"] + Xm[,"PP"]/3
+
+Xm[,"menopause"] = 0
+Xm[,"any_hrt"] = "male"
+
+#drop hematocrit
+#hematocrit values are garbage for years 2013-2017
+#why? because they reused a variable name:
+  #LBXHCT: Hydroxycotinine, Serum (ng/mL) #2013-2014, 2015-2016 & 2017-2018
+  #LBXHCT: Hematocrit (%)
+#ggplot(X,aes(x=ordered(survey_year+1999.5),y=LBXHCT))+geom_boxplot()+scale_y_log10()
+Xm[,"LBXHCT"] =dplyr::case_when(
+                      round(Xm[,"survey_year"]) == 14 ~ NA_real_,
+                      round(Xm[,"survey_year"]) == 16 ~ NA_real_,
+                      round(Xm[,"survey_year"]) == 18 ~ NA_real_,
+                      TRUE     ~ Xm[,"LBXHCT"])
+```
+
+```{r}
+mort = read.csv("/home/glen/data/nhanes/nhanes_mortality_all_years.csv")
+rownames(mort) = mort[,"SEQN"]
+#table(demo[!is.na(datapp[,"status"]),"SDDSRVYR"]) 
+  # 5    8    9  #mortality_data.csv = nhanes0102.csv
+  #4541 4111  430 
+  #4    5    7    8   12 #nhanes03040506.csv
+  #4746 3252 4000 3998  456 
+  # 1     2     3     4     5     7     8     9    10    12    66  #nhanes_mortality_all_years.csv
+  #6742 11007 10105 10337 10132  7746 10155  9955  9231   479 11236 
+
+#mortality data
+X[,"stop"] = NA
+X[,"status"] = NA
+pts = intersect(rownames(mort),rownames(X))
+X[pts,"stop"] = mort[pts,"years_remaining"] + X[pts,"RIDAGEYR"] + 1/365.25 #add a day to avoid irritating start = stop problems
+X[pts,"status"] = mort[pts,"status"]
+
+s = Surv(X[,"RIDAGEYR"],X[,"stop"],X[,"status"])
+s2 = Surv(rep(0,nrow(s)),s[,2]-s[,1],s[,3])
+rownames(s)=rownames(X)
+rownames(s2)=rownames(X)
+
+
+Xm[,"stop"] = NA
+Xm[,"status"] = NA
+pts = intersect(rownames(mort),rownames(Xm))
+Xm[pts,"stop"] = mort[pts,"years_remaining"] + Xm[pts,"RIDAGEYR"] + 1/365.25
+Xm[pts,"status"] = mort[pts,"status"]
+
+sm = Surv(Xm[,"RIDAGEYR"],Xm[,"stop"],Xm[,"status"])
+rownames(sm) =rownames(Xm)
+sm2 = Surv(rep(0,nrow(sm)), sm[,2]-sm[,1],sm[,3])
+rownames(sm2)=rownames(sm)
+```
+
+
+reproductive factors
+```{r}
+repro = read.csv(sprintf("%s/data/nhanes_repro.csv",nhanesDir),row.names=1)
+v = c("age_menarche","has_periods","menopause","ever_preg","preg_now","age_last_period","age_menopause","ovaries_removed",
+      "times_preg","parity","age_first_birth","age_last_birth","used_hrt","hrt_pre_meno","estrogen_hrt","age_estrogen_hrt", 
+      "both_hrt_now","both_hrt",
+      "estrogen_hrt_now","time_on_estrogen_hrt_nounits", "time_on_estrogen_units","time_on_estrogen_hrt","progestin_hrt","age_progestin_hrt",
+      "progestin_hrt_now","time_on_progestin_hrt_nounits","time_on_progestin_hrt_units","time_on_progestin_hrt","combo_hrt","age_combo_hrt",
+      "combo_hrt_now","time_on_combo_hrt_nounits","time_on_combo_hrt_units","time_on_combo_hrt","time_on_hrt","hrtPillFull","hrtPill",
+      "ever_birth_control_pills","birth_control_pills_now","age_started_birth_control_pills","age_stopped_birth_control_pills","how_long_taking_birth_control_pills"
+      )
+for (j in 1:length(v)) X[,v[j]] = NA
+X[,v] = repro[rownames(X),v]
+
+reproCodex = read.csv(sprintf("%s/data/rhq_codex.csv",nhanesDir))
+reproCodex = subset(reproCodex,!is.na(Variable.Name))
+rownames(reproCodex) = reproCodex[,"Variable.Name"]
+```
+
+drugs
+```{r}
+loadDrugs=FALSE
+if(loadDrugs)
+{
+  drugs = read.csv(sprintf("%s/data/nhanes_rxd_preproc.csv",nhanesDir),row.names=1)
+
+v = c(estrogen_hrt_drug="estrogen_hrt",
+      progesterone_hrt_drug="progesterone_hrt",
+      both_hrt_drug="both_hrt",
+      estrogen_contraceptive_drug="estrogen_contraceptive",
+      progesterone_contraceptive_drug="progesterone_contraceptive")
+for (j in 1:length(v)) X[,names(v)[j]] = NA
+X[,names(v)] = drugs[rownames(X),v]
+}
+
+```
+
+sleep
+```{r}
+sleep = read.csv(sprintf("%s/data/nhanes_sleep.csv",nhanesDir),row.names=1)
+v = c("sleep_time","sleep_time_weekends","snore","sleep_breathing",
+      "trouble_sleeping","sleep_disorder","falling_asleep","wakeup_at_night",
+      "wakeup_too_early","insufficient_sleep","sleeping_pills")
+for (j in 1:length(v)) X[,v[j]] = NA
+X[,v] = sleep[rownames(X),v]
+
+for (j in 1:length(v)) Xm[,v[j]] = NA
+Xm[,v] = sleep[rownames(Xm),v]
+
+sleepCodex = read.csv(sprintf("%s/data/slq_codex.csv",nhanesDir))
+sleepCodex = subset(sleepCodex,!is.na(Variable.Name))
+rownames(sleepCodex) = sleepCodex[,"Variable.Name"]
+```
+
+
+
+physical activity (questionnaire data)
+```{r}
+pa = read.csv(sprintf("%s/data/nhanes_pa.csv",nhanesDir),row.names=1)
+v = setdiff(colnames(pa),colnames(X))
+for (j in 1:length(v)) X[,v[j]] = NA
+X[,v] = pa[rownames(X),v]
+
+for (j in 1:length(v)) Xm[,v[j]] = NA
+Xm[,v] = pa[rownames(Xm),v]
+
+paCodex = read.csv(sprintf("%s/data/pa_codex.csv",nhanesDir))
+paCodex = subset(paCodex,!is.na(Variable.Name))
+rownames(paCodex) = paCodex[,"Variable.Name"]
+```
+
+diet
+```{r}
+diet = read.csv(sprintf("%s/data/nhanes_diet.csv",nhanesDir),row.names=1)
+v = setdiff(colnames(diet),colnames(X))
+for (j in 1:length(v)) X[,v[j]] = NA
+X[,v] = diet[rownames(X),v]
+
+for (j in 1:length(v)) Xm[,v[j]] = NA
+Xm[,v] = diet[rownames(Xm),v]
+
+dietCodex = read.csv(sprintf("%s/data/diet_codex.csv",nhanesDir))
+dietCodex = subset(dietCodex,!is.na(Variable.Name))
+rownames(dietCodex) = dietCodex[,"Variable.Name"]
+```
+
+depression (DPQ)
+```{r}
+depression = read.csv(sprintf("%s/data/nhanes_dpq.csv",nhanesDir),row.names=1)
+v = setdiff(colnames(depression),colnames(X))
+for (j in 1:length(v)) X[,v[j]] = NA
+X[,v] = depression[rownames(X),v]
+
+for (j in 1:length(v)) Xm[,v[j]] = NA
+Xm[,v] = depression[rownames(Xm),v]
+
+depressionCodex = read.csv(sprintf("%s/data/dpq_codex.csv",nhanesDir))
+depressionCodex = subset(depressionCodex,!is.na(Variable.Name))
+rownames(depressionCodex) = depressionCodex[,"Variable.Name"]
+```
+
+body composition (dx - dual x-ray)
+```{r}
+bodyComp = read.csv(sprintf("%s/data/nhanes_dx.csv",nhanesDir),row.names=1)
+v = setdiff(colnames(bodyComp),colnames(X))
+for (j in 1:length(v)) X[,v[j]] = NA
+X[,v] = bodyComp[rownames(X),v]
+
+for (j in 1:length(v)) Xm[,v[j]] = NA
+Xm[,v] = bodyComp[rownames(Xm),v]
+
+bodyCompCodex = read.csv(sprintf("%s/data/dx_codex.csv",nhanesDir))
+bodyCompCodex = subset(bodyCompCodex,!is.na(Variable.Name))
+rownames(bodyCompCodex) = bodyCompCodex[,"Variable.Name"]
+```
+
+
+
+
+exam data - gait and grip
+```{r}
+Max = function(x,na.rm=T) #returns NA if all NA, otherwise can drop NAs
+{
+  if(na.rm) x= x[!is.na(x)]
+  if(length(x)<1) return(NA)
+  else return(max(x))
+}
+
+exam = read.csv(sprintf("%s/nhanes_exam/nhanes_exam.csv",dataDir))
+rownames(exam)=exam[,"SEQN"]
+
+
+
+comb = c("MSXW20TM","MSXWTIME")
+logi = is.na(exam[,"MSXW20TM"])
+logi[is.na(logi)] = F
+exam[logi,"MSXW20TM"] = exam[logi,"MSXWTIME"]
+X[,"gait_speed"] = 20*0.3048/exam[rownames(X),"MSXW20TM"] #meters/second
+Xm[,"gait_speed"] = 20*0.3048/exam[rownames(Xm),"MSXW20TM"] #meters/second
+  
+gripVar = c(sprintf("MGXH1T%d",1:3),sprintf("MGXH2T%d",1:3))
+Nmeas = apply(!is.na(exam[pts,gripVar]),1,sum,na.rm=T)
+X[,"grip_strength"] = apply(exam[rownames(X),gripVar],1,Max,na.rm=T) #max grip, kg force
+Xm[,"grip_strength"] = apply(exam[rownames(Xm),gripVar],1,Max,na.rm=T) #max grip, kg force
+
+#cutoffs used are in nhanes_clinic_preprocessing
+  #Huemer, M.-T. et al. Grip strength values and cut-off points based on over 200,000 adults of the German National Cohort - a comparison to the EWGSOP2 cut-off points. Age Ageing 52, (2023).
+    #29 and 18 #max grip #looks reasonable #*****used these
+
+rm(exam)
+```
+
+covariates for adjustment
+screen variables for age of menopause effects
+variables must be ordinal
+```{r}
+#demographics
+x =demo[rownames(X),"DMDEDUC2"]
+X[,"educationf"] = dplyr::case_when(
+                      x == 1 ~ "<9th grade", 
+                      x == 2 ~ "some high school", 
+                      x == 3 ~ "high school grad", 
+                      x == 4 ~ "some college",
+                      x == 5 ~ "college grad",
+                      x > 5 ~ NA_character_, 
+                      TRUE   ~ NA_character_)
+x =demo[rownames(Xm),"DMDEDUC2"]
+Xm[,"educationf"] = dplyr::case_when(
+                      x == 1 ~ "<9th grade", 
+                      x == 2 ~ "some high school", 
+                      x == 3 ~ "high school grad", 
+                      x == 4 ~ "some college",
+                      x == 5 ~ "college grad",
+                      x > 5 ~ NA_character_, 
+                      TRUE   ~ NA_character_)
+X[,"education"] = as.numeric(factor(X[,"educationf"]))
+Xm[,"education"] = as.numeric(factor(Xm[,"educationf"]))
+x =demo[rownames(X),"RIDRETH1"]
+X[,"ethnicity"] = dplyr::case_when( #had to update July 2025
+                      x == 1    ~"mexican", #"white"
+                      x == 2    ~ "other hispanic", #"black"
+                      x == 3    ~ "white", #"mexican"
+                      x == 4    ~  "black", #"other"
+                      x == 5    ~  "other", #"other hispanic"
+                      TRUE   ~ NA_character_)
+x =demo[rownames(Xm),"RIDRETH1"]
+Xm[,"ethnicity"] = dplyr::case_when(
+                      x == 1    ~"mexican", #"white"
+                      x == 2    ~ "other hispanic", #"black"
+                      x == 3    ~ "white", #"mexican"
+                      x == 4    ~  "black", #"other"
+                      x == 5    ~  "other", #"other hispanic"
+                      TRUE   ~ NA_character_)
+X[,"race"] = dplyr::case_when(                                   #simplified ethnicity
+                      is.na(X[,"ethnicity"])    ~ NA_character_, 
+                      X[,"ethnicity"] == "white"    ~ "white", 
+                      X[,"ethnicity"] == "black"    ~ "black",
+                      TRUE   ~ "other")
+Xm[,"race"] = dplyr::case_when(                                  #simplified ethnicity
+                      is.na(Xm[,"ethnicity"])    ~ NA_character_, 
+                      Xm[,"ethnicity"] == "white"    ~ "white", 
+                      Xm[,"ethnicity"] == "black"    ~ "black",
+                      TRUE   ~ "other")
+x =demo[rownames(X),"DMDBORN"]
+X[,"birth_country"] = dplyr::case_when(
+                      x == 1 ~ "USA", 
+                      x == 2 ~ "Mexico", 
+                      x == 3 ~ "Elsewhere", 
+                      TRUE   ~ NA_character_)
+x =demo[rownames(Xm),"DMDBORN"]
+Xm[,"birth_country"] = dplyr::case_when(
+                      x == 1 ~ "USA", 
+                      x == 2 ~ "Mexico", 
+                      x == 3 ~ "Elsewhere", 
+                      TRUE   ~ NA_character_)
+X[,"poverty_income_ratio"]  = X[,"INDFMPIR"]*5 
+X[,"poverty_income_ratiof"] = cut(X[,"INDFMPIR"]*5,c(0,1,2,4,5),include.lowest=T)
+Xm[,"poverty_income_ratio"] = Xm[,"INDFMPIR"]*5 
+Xm[,"poverty_income_ratiof"] = cut(Xm[,"INDFMPIR"]*5,c(0,1,2,4,5),include.lowest=T)
+X[,"poverty"] = as.integer(X[,"INDFMPIR"]*5 <= 1)
+Xm[,"poverty"] = as.integer(Xm[,"INDFMPIR"]*5 <= 1)
+#X[,"income"] = X[,"INDFMINC"]
+#Xm[,"income"] = Xm[,"INDFMINC"]
+
+#smoking
+x = clinic[rownames(X),"SMQ020"]
+X[,"smoke_ever"] = dplyr::case_when(
+                    x==1                ~ 1, #yes
+                    x==2                ~ 0, #no
+                    TRUE                ~ NA_real_)
+x = clinic[rownames(Xm),"SMQ020"]
+Xm[,"smoke_ever"] = dplyr::case_when(
+                    x==1                ~ 1, #yes
+                    x==2                ~ 0, #no
+                    TRUE                ~ NA_real_)
+x = clinic[rownames(X),"SMQ040"]
+X[,"smoke_now"] = dplyr::case_when(
+                    X[,"smoke_ever"]==0 ~ 0,
+                    x==3                ~ 0, #not at all
+                    x==1                ~ 1, #every day
+                    x==2                ~ 1, #some days
+                    TRUE                ~ NA_real_)
+x = clinic[rownames(Xm),"SMQ040"]
+Xm[,"smoke_now"] = dplyr::case_when(
+                    Xm[,"smoke_ever"]==0 ~ 0,
+                    x==3                ~ 0, #not at all
+                    x==1                ~ 1, #every day
+                    x==2                ~ 1, #some days
+                    TRUE                ~ NA_real_)
+
+x = clinic[rownames(X),"SMQ040"]
+X[,"smoke_daily"] = dplyr::case_when(
+                    X[,"smoke_ever"]==0 ~ 0,
+                    x==3                ~ 0, #not at all
+                    x==1                ~ 1, #every day
+                    x==2                ~ 0, #some days
+                    TRUE                ~ NA_real_)
+x = clinic[rownames(Xm),"SMQ040"]
+Xm[,"smoke_daily"] = dplyr::case_when(
+                    Xm[,"smoke_ever"]==0 ~ 0,
+                    x==3                ~ 0, #not at all
+                    x==1                ~ 1, #every day
+                    x==2                ~ 0, #some days
+                    TRUE                ~ NA_real_)
+
+#reproductive - age_menarche is gaussian so just incldue as is
+X[,"menarchef"]  =  cut(X[,"age_menarche"],quantile(X[,"age_menarche"],probs=c(0,.5,1),na.rm=T),c(1,0),include.lowest = T)
+Xm[,"menarchef"] = NA
+
+#health care 
+#HUQ010 - General health condition - very low missingness
+x = clinic[rownames(X),"HUQ010"]
+X[,"health"] = dplyr::case_when(
+                      x == 1 ~ 0,  #Excellent
+                      x == 2 ~ 0, 
+                      x == 3 ~ 0, 
+                      x == 4 ~ 1, 
+                      x == 5 ~ 1, #Poor
+                      TRUE   ~ NA_real_)
+#HIQ011 - Covered by health insurance - low missingenss
+x = clinic[rownames(X),"HIQ011"] #new version
+y =  clinic[rownames(X),"HID010"] #old version
+x[is.na(x)] = y[is.na(x)]
+X[,"insurance"] =  dplyr::case_when(
+                      x == 1    ~ 1, #yes - you have health insurance
+                      x == 2    ~ 0, #no - you don't
+                      TRUE   ~ NA_real_)
+x = clinic[rownames(Xm),"HIQ011"] #new version
+y =  clinic[rownames(Xm),"HID010"] #old version
+x[is.na(x)] = y[is.na(x)]
+Xm[,"insurance"] =  dplyr::case_when(
+                      x == 1    ~ 1, #yes - you have health insurance
+                      x == 2    ~ 0, #no - you don't
+                      TRUE   ~ NA_real_)
+
+
+#HUQ030 - Routine place to go for healthcare - very low missingness
+x = clinic[rownames(X),"HUQ030"]
+X[,"healthcareLocation"] = dplyr::case_when(
+                      x == 1    ~ "yes", #1 regular place to go
+                      x == 3    ~ "multiple", #>1 regular place
+                      x == 2    ~ "no", #no regular place to go
+                      TRUE   ~ NA_character_)
+x = clinic[rownames(Xm),"HUQ030"]
+Xm[,"healthcareLocation"] = dplyr::case_when(
+                      x == 1    ~ "yes", #1 regular place to go
+                      x == 3    ~ "multiple", #>1 regular place
+                      x == 2    ~ "no", #no regular place to go
+                      TRUE   ~ NA_character_)
+
+
+#nutrition
+#HHfdsec - Household food security category
+#FSDHH - Household food security category -after first 2 waves
+#FSD010 - Food adequacy indicator
+#FSD032A - HH Worried run out of food -high missingness
+#x = clinic[rownames(X),"FSD032A"]
+#X[,"foodInsecurity"] = dplyr::case_when(
+#                      x    ~ "often", #often
+#                      x    ~ "sometimes", #sometimes
+#                      x    ~ "no",  #never
+#                      TRUE   ~ NA_character_)
+#x = clinic[rownames(Xm),"FSD032A"]
+#Xm[,"foodInsecurity"] = dplyr::case_when(
+#                      x    ~ "often", #often
+#                      x    ~ "sometimes", #sometimes
+#                      x    ~ "no",  #never
+#                      TRUE   ~ NA_real_)
+x = clinic[rownames(X),"FSDAD"] #FSDHH - Adult food security category
+y = clinic[rownames(X),"ADFDSEC"] #FSDHH - Adult food security category
+warning("to do: what is food insecurity for 2019-2020?")
+x[is.na(x)] = y[is.na(x)]
+X[,"foodSecurityf"] = dplyr::case_when(
+                      x ==1   ~ "secure",    #0
+                      x ==2    ~ "marginal", #1-2 
+                      x ==3    ~ "low",      #3-5
+                      x ==4    ~ "very low", #6+ 
+                      TRUE   ~ NA_character_)
+x = clinic[rownames(Xm),"FSDAD"] #FSDHH - Adult food security category
+y = clinic[rownames(Xm),"ADFDSEC"] #FSDHH - Adult food security category
+x[is.na(x)] = y[is.na(x)]
+Xm[,"foodSecurityf"] = dplyr::case_when(
+                      x ==1   ~ "secure",    #0
+                      x ==2    ~ "marginal", #1-2 
+                      x ==3    ~ "low",      #3-5
+                      x ==4    ~ "very low", #6+ 
+                      TRUE   ~ NA_character_)
+X[,"foodInsecurity"] = dplyr::case_when(
+                      X[,"foodSecurityf"] %in% c("secure","marginal") ~ 0,
+                      X[,"foodSecurityf"] %in% c("low","very low") ~ 1,
+                      TRUE   ~ NA_real_)
+Xm[,"foodInsecurity"] = dplyr::case_when(
+                      Xm[,"foodSecurityf"] %in% c("secure","marginal") ~ 0,
+                      Xm[,"foodSecurityf"] %in% c("low","very low") ~ 1,
+                      TRUE   ~ NA_real_)
+
+#"birth_country", #often missing
+#poverty & food insecurity are often missing
+#poverty can probably be improved by including a conversion from income
+#food insecurity is missing for 2019-2020
+adjustmentCols = c("RIDAGEYR","education","ethnicity","smoke_ever","smoke_now","insurance","poverty") #,"health" #,"foodInsecurity"
+
+print(sort(apply(is.na(X[,adjustmentCols ]),2,mean)))
+```
+
+
+#factor repro data
+```{r}
+X[,"meno"] = factor(X[,"menopause"],c(1,0),c("meno","no meno"))
+
+#fewer NAs:
+X[,"any_hrt"] =  dplyr::case_when(
+                      is.na(X[,"meno"]) ~ NA_character_,
+                      X[,"meno"] == "no meno" ~ "no_meno",
+                      is.na(X[,"used_hrt"]) ~ NA_character_,
+                      X[,"used_hrt"] == 0 ~ "no_hrt",
+                      X[,"used_hrt"] == 1 ~ "any_hrt")
+X[,"any_hrt"] = factor(X[,"any_hrt"],c("no_meno","any_hrt","no_hrt"))
+
+
+X[,"hrt"] =  dplyr::case_when(
+                      is.na(X[,"meno"]) ~ NA_character_,
+                      X[,"meno"] == "no meno" ~ "no",
+                      is.na(X[,"used_hrt"]) ~ NA_character_,
+                      X[,"used_hrt"] == 0 ~ "no",
+                      X[,"used_hrt"] == 1 ~ "any")
+X[,"hrt"] = factor(X[,"hrt"],c("any","no"))
+
+
+X[,"hrt_group"] =  dplyr::case_when(
+                      is.na(X[,"meno"]) ~ NA_character_,
+                      X[,"meno"] == "no meno" ~ "no_meno",
+                      is.na(X[,"used_hrt"]) ~ NA_character_,
+                      X[,"used_hrt"] == 0 ~ "no_hrt",
+                      X[,"used_hrt"] == 1 & X[,"hrt_pre_meno"] == 1        ~ "hrt_pre_meno",
+                      X[,"used_hrt"] == 1 & X[,"hrt_pre_meno"] == 0        ~ "used_hrt")
+logi = X[,"hrtPill"] %in% c("combo","estrogen","progestin")
+logi[is.na(logi)] = F
+X[logi,"hrt_group"] ="hrt_now"
+
+X[,"hrt_group_nomeno"] = X[,"hrt_group"]
+logi = X[,"menopause"]==0
+logi[is.na(logi)] = F
+X[logi,"hrt_group_nomeno"] = "no_meno"
+
+#X[,"hrt_group2"] = factor(X[,"hrt_group"],c("no_hrt","pre_meno","used_hrt","hrt_now","no_meno"),c("no_meno","hrt_now","used_hrt","hrt_pre_meno","no_hrt"))
+X[,"hrt_group2"] = factor(X[,"any_hrt"],c("no_meno","any_hrt","no_hrt"))
+
+X[,"hrt_group"] = factor(X[,"hrt_group"],c("no_meno","hrt_pre_meno","hrt_now","used_hrt","no_hrt"))
+
+X[,"any_hrt2"] = as.character(X[,"any_hrt"])
+logi = X[,"preg_now"] == 1
+logi[is.na(logi)] = F
+X[logi,"any_hrt2"] = "preg"
+X[,"any_hrt2"] = factor(X[,"any_hrt2"],c("preg","no_meno","any_hrt","no_hrt"))
+
+X[,"any_mrt"] =  dplyr::case_when(
+                      is.na(X[,"meno"]) ~ NA_character_,
+                      X[,"meno"] == "no meno" ~ "no",
+                      is.na(X[,"hrtPill"]) ~ NA_character_,
+                      X[,"hrtPill"] == "none" ~ "no",
+                      X[,"hrtPill"] %in% c("combo","estrogen","progestin") ~ "mrt",
+                      TRUE ~ NA_character_)
+X[,"any_mrt"] = factor(X[,"any_mrt"],c("no","mrt"))
+
+X[,"hrt_now"] =  dplyr::case_when(
+                      is.na(X[,"hrtPill"]) ~ NA_character_,
+                      X[,"hrtPill"] == "none" ~ "no",
+                      X[,"hrtPill"] %in% c("estrogen","combo","progestin") ~ "yes",
+                      TRUE ~ X[,"hrtPill"] )
+X[,"hrt_now"] = factor(X[,"hrt_now"],c("no","yes"))
+
+
+
+
+X[,"mrt"] =  dplyr::case_when(
+                      is.na(X[,"meno"]) ~ NA_character_,
+                      X[,"meno"] == "no meno" ~ "no",
+                      is.na(X[,"hrtPill"]) ~ NA_character_,
+                      X[,"hrtPill"] == "none" ~ "no",
+                      TRUE ~ X[,"hrtPill"] )
+X[,"mrt"] = factor(X[,"mrt"],c("no","estrogen","combo","progestin"))
+
+X[,"bin_combo_mrt_now"] =  dplyr::case_when(
+                      is.na(X[,"meno"]) ~ NA_real_,
+                      X[,"meno"] == "no meno" ~ 0.0,
+                      is.na(X[,"combo_hrt_now"]) ~ NA_real_,
+                      TRUE ~ 1.0*X[,"combo_hrt_now"] )
+
+X[,"ert"] =  dplyr::case_when(
+                      is.na(X[,"meno"]) ~ NA_character_,
+                      X[,"meno"] == "no meno" ~ "no_meno",
+                      is.na(X[,"hrtPill"]) ~ NA_character_,
+                      X[,"hrtPill"] == "none" ~ "no",
+                      X[,"hrtPill"] %in% c("combo","estrogen") ~ "estrogen",
+                      TRUE ~ NA_character_)
+X[,"ert"] = factor(X[,"ert"],c("no","estrogen"))
+```
+
+
+how many pregnant? (will exclude later)
+```{r}
+print(table(X[,"preg_now"]))
+```
+
+add binary (& extra continuous) variables
+```{r}
+lBinVar = list()
+lContVar = list()
+
+Xm[,"has_periods"] = 0
+Xm[,"preg_now"] = 0
+Xm[,"ovaries_removed"] = 0
+#lBinVar$gonad = c("has_periods","preg_now","ovaries_removed")
+lBinVar$gonad = c("ovaries_removed")
+
+
+X[,"kidney_disease"]  = as.integer(X[,"KIQ020"])
+Xm[,"kidney_disease"] = as.integer(Xm[,"KIQ020"])
+X[,"kidney_stones"]   = as.integer(X[,"KIQ026"])
+Xm[,"kidney_stones"]  = as.integer(Xm[,"KIQ026"])
+X[,"leak_urine"]      = as.integer(X[,"KIQ042"])
+Xm[,"leak_urine"]     = as.integer(Xm[,"KIQ042"])
+X[,"gout"]            = as.integer(X[,"MCQ160N"])
+Xm[,"gout"]           = as.integer(Xm[,"MCQ160N"])
+lBinVar$kidney = c("kidney_disease","kidney_stones","leak_urine","gout")
+
+
+
+X[,"heart_failure"] = as.integer(X[,"MCQ160B"])
+Xm[,"heart_failure"] = as.integer(Xm[,"MCQ160B"])
+X[,"heart_disease"] = as.integer(X[,"MCQ160C"])
+Xm[,"heart_disease"] = as.integer(Xm[,"MCQ160C"])
+X[,"angina"] = as.integer(X[,"MCQ160D"])
+Xm[,"angina"] = as.integer(Xm[,"MCQ160D"])
+X[,"heart_attack"] = as.integer(X[,"MCQ160E"])
+Xm[,"heart_attack"] = as.integer(Xm[,"MCQ160E"])
+X[,"stroke"] = as.integer(X[,"MCQ160F"])
+Xm[,"stroke"] = as.integer(Xm[,"MCQ160F"])
+
+lBinVar$heart = c("heart_failure","heart_disease","angina","heart_attack","stroke")
+
+
+x = clinic[rownames(X),"DIQ010"]
+X[,"diabetes"] = dplyr::case_when(
+                      x == 1        ~ 1,
+                      x == 2        ~ 0,
+                      x == 3        ~ 1, #"borderline"
+                      x > 3         ~ NA_real_,
+                      is.na(x)       ~ NA_real_)
+
+x = clinic[rownames(Xm),"DIQ010"]
+Xm[,"diabetes"] = dplyr::case_when(
+                      x == 1        ~ 1,
+                      x == 2        ~ 0,
+                      x == 3        ~ 1, #"borderline"
+                      x > 3         ~ NA_real_,
+                      is.na(x)       ~ NA_real_)
+lBinVar$metabolic = c("diabetes")
+
+
+X[,"arthritis"] = as.integer(X[,"MCQ160A"])
+Xm[,"arthritis"] = as.integer(Xm[,"MCQ160A"])
+X[,"hip_fracture"] = as.integer(X[,"OSQ010A"])
+Xm[,"hip_fracture"] = as.integer(Xm[,"OSQ010A"])
+X[,"osteoporosis"] = as.integer(X[,"OSQ060"])
+Xm[,"osteoporosis"] = as.integer(Xm[,"OSQ060"])
+X[,"taken_immunosuppressant"] = as.integer(X[,"OSQ130"])
+Xm[,"taken_immunosuppressant"] = as.integer(Xm[,"OSQ130"])
+X[,"weak_grip"] = as.integer(X[,"GRIP"])
+Xm[,"weak_grip"] = as.integer(Xm[,"GRIP"])
+
+X[,"slow_gait"] = as.integer(apply(X[,c("GAIT_GRADE01","GAIT_GRADE02")],1,mean,na.rm=T) > .01)
+Xm[,"slow_gait"] = as.integer(apply(Xm[,c("GAIT_GRADE01","GAIT_GRADE02")],1,mean,na.rm=T) > .01)
+lBinVar$bone = c("arthritis","hip_fracture","osteoporosis","taken_immunosuppressant","weak_grip","slow_gait")
+
+
+#binarize adls to any difficulty
+let = setdiff(LETTERS[1:20],c("A","N","P","Q","R","S"))
+adlVars = character()
+for (j in 1:length(let))
+{
+  #nm = fiCodex[sprintf("PFQ061%s_GRADE01",let[j]),"parsed"]
+  #nm = strsplit(nm,"some diff ",fixed=TRUE)[[1]][2]
+  #nm = gsub(",","",nm,fixed=TRUE)
+  #nm = gsub(" ","_",nm,fixed=TRUE)
+  nm = fiCodex[sprintf("PFQ061%s_GRADE01",let[j]),"terse"]
+  adlVars[j] = nm
+  X[,nm] = as.integer(apply(X[,sprintf("PFQ061%s_GRADE0%d",let[j],1:3)],1,mean,na.rm=T) > .01)
+  Xm[,nm] = as.integer(apply(Xm[,sprintf("PFQ061%s_GRADE0%d",let[j],1:3)],1,mean,na.rm=T) > .01)
+}
+
+X[,"weak_grip"] = as.integer(X[,"GRIP"])
+Xm[,"weak_grip"] = as.integer(Xm[,"GRIP"])
+
+lBinVar$muscle = c(adlVars,"weak_grip","GAIT_GRADE01","GAIT_GRADE02")
+#lContVar$muscle = "grip_strength"
+
+X[,"thyroid_problem"]  = as.integer(X[,"MCQ160M"])
+Xm[,"thyroid_problem"] = as.integer(Xm[,"MCQ160M"])
+lBinVar$thyroid = c("thyroid_problem")
+
+X[,"liver_disease"] = 1*X[,"MCQ160L"]
+Xm[,"liver_disease"] = 1*Xm[,"MCQ160L"]
+X[,"hepeG"] =1*(X[,"LBDHEG"]==1)
+X[,"hepeM"] =1*(X[,"LBDHEM"]==1)
+Xm[,"hepeG"] =1*(Xm[,"LBDHEG"]==1)
+Xm[,"hepeM"] =1*(Xm[,"LBDHEM"]==1)
+lBinVar$liver = c("liver_disease","hepeG","hepeM")
+
+X[,"taken_immunosuppressant"] = as.integer(X[,"OSQ130"])
+Xm[,"taken_immunosuppressant"] = as.integer(Xm[,"OSQ130"])
+lBinVar$immune_inflammation = c("taken_immunosuppressant")
+
+X[,"asthma"]     = as.integer(X[,"MCQ010"])
+Xm[,"asthma"]    = as.integer(Xm[,"MCQ010"])
+X[,"emphysema"]     = as.integer(X[,"MCQ160G"])
+Xm[,"emphysema"]    = as.integer(Xm[,"MCQ160G"])
+X[,"bronchitis"]     = as.integer(X[,"MCQ160K"])
+Xm[,"bronchitis"]    = as.integer(Xm[,"MCQ160K"])
+X[,"copd"]     = as.integer(X[,"MCQ160O"])
+Xm[,"copd"]    = as.integer(Xm[,"MCQ160O"])
+lBinVar$lung = c("asthma","emphysema","bronchitis","copd")
+
+lBinVar$sleep = c("snore", "sleep_breathing",
+                  "trouble_sleeping","sleep_disorder","falling_asleep","wakeup_at_night",
+                  "wakeup_too_early",   "insufficient_sleep",  "sleeping_pills")
+
+X[,"anemia"] = as.integer(X[,"MCQ053"])
+Xm[,"anemia"] = as.integer(Xm[,"MCQ053"])
+lBinVar$rbc = c("anemia")
+
+
+X[,"CERAD"]       = as.integer(X[,"CERAD"])
+Xm[,"CERAD"]      = as.integer(Xm[,"CERAD"])
+X[,"CERADDR"]     = as.integer(X[,"CERADDR"])
+Xm[,"CERADDR"]    = as.integer(Xm[,"CERADDR"])
+X[,"AFT"]         = as.integer(X[,"AFT"])
+Xm[,"AFT"]        = as.integer(Xm[,"AFT"])
+X[,"DSST"]        = as.integer(X[,"DSST"])
+Xm[,"DSST"]       = as.integer(Xm[,"DSST"])
+X[,"trouble_sleeping"]     = as.integer(X[,"SLQ050"])
+Xm[,"trouble_sleeping"]    = as.integer(Xm[,"SLQ050"])
+X[,"managing_money_hard"]     = as.integer(apply(X[,c("PFQ061A_GRADE01","PFQ061A_GRADE02","PFQ061A_GRADE03")],1,mean,na.rm=T) > .01)
+Xm[,"managing_money_hard"]    = as.integer(apply(Xm[,c("PFQ061A_GRADE01","PFQ061A_GRADE02","PFQ061A_GRADE03")],1,mean,na.rm=T) > .01)
+
+
+lBinVar$brain = c("CERAD","CERADDR","AFT","DSST","managing_money_hard","trouble_sleeping")
+
+
+x = clinic[rownames(X),"RHQ100"] #RHQ100 - Menstrual bleeding rate/last 5 years #problem: only in first few waves
+X[,"menstrual_bleeding"] = dplyr::case_when(
+                      x == 1        ~ 1, #heavier
+                      x == 2        ~ 0, #lighter
+                      x == 3        ~ 0, #same
+                      x > 3         ~ NA_real_,
+                      is.na(x)       ~ NA_real_)
+Xm[,"menstrual_bleeding"] = NA
+lBinVar$clotting = "stroke"
+
+
+lBinVar$lifestyle = c("smoke_ever","smoke_now","smoke_daily","any_mod_activity","any_vig_activity","any_activity")
+
+lBinVar$diet = c("special_diet","low_cal_diet","low_fat_diet","low_salt_diet")
+
+#binarize #comes from sum of the first 9
+depVars = c("little_interest_doing",
+"feeling_down",
+"depression_sleep",
+"low_energy",
+"depression_appetite",
+"low_self_esteem",
+"difficulty_concentrating",
+"depression_speech",
+"better_off_dead","depression_difficulties")
+X[,depVars] = X[,sprintf("%s_GRADE01",depVars)]
+Xm[,depVars] = Xm[,sprintf("%s_GRADE01",depVars)]
+
+#now in file
+#X[,"depression_score"] = apply(X[,depVars],1,mean)
+#Xm[,"depression_score"] = apply(Xm[,depVars],1,mean)
+
+depCuts = c(0,4,9,14,19,27)/27 
+depLabels = c("none","mild","moderate","moderately_severe","severe")
+X[,"depression_scoref"] = cut(X[,"depression_score"],depCuts,depLabels,include.lowest=TRUE)
+Xm[,"depression_scoref"] = cut(Xm[,"depression_score"],depCuts,depLabels,include.lowest=TRUE)
+for (j in 1:length(depLabels)) #I don't like this... I want to go ordinal
+{
+  #one-hot
+  #X[,sprintf("%s_depression",depLabels[j])] = 1.0*(X[,"depression_scoref"]==depLabels[j])
+  #Xm[,sprintf("%s_depression",depLabels[j])] = 1.0*(Xm[,"depression_scoref"]==depLabels[j])
+  
+  #ordinal one-hot
+  X[,sprintf("%s_depression",depLabels[j])] = 1*(X[,"depression_score"] > depCuts[j])
+  Xm[,sprintf("%s_depression",depLabels[j])] = 1*(Xm[,"depression_score"] > depCuts[j])
+}
+
+
+#lBinVar$depression = sprintf("any_%s",depVars)
+#lBinVar$depression = c(sprintf("%s_depression",depLabels),"depression_difficulties")
+lBinVar$depression = c(depVars,"depression_difficulties") #depVars are grade01
+```
+
+#which continuous variables do I have to worry about?
+```{r}
+systems=c("depression","body_comp","lifestyle","diet","immune_inflammation","lung","metabolic","rbc","gonad","heart","adrenal_cortex","bone","liver","thyroid","muscle","kidney","toxin","sleep","clotting","brain")
+
+vars=character()
+donateTo=character()
+for (k in 1:length(systems)) #master loop for everything ##TEMPORARY CHANGES, also check below
+{
+
+  Bcode = read.csv(sprintf("%s/data/%s_biomarkers.csv",outputDir,systems[k]))
+  for (j in 1:nrow(Bcode))
+  {
+    useMe = grep("NHANES",colnames(Bcode))
+    donateTo = c(donateTo,rep(Bcode[,"var"],length(useMe)))
+    vars = c(vars,c(as.matrix(Bcode[,useMe])))
+  }
+  
+}
+
+donateTo = donateTo[!is.na(vars) & vars!=""]
+vars = vars[!is.na(vars) & vars!=""]
+donateTo=donateTo[!duplicated(vars)]
+vars=vars[!duplicated(vars)]
+varsDF = data.frame(var=vars,donateTo=donateTo) #save in case
+rownames(varsDF)=vars
+
+#specific drops (not continuous) - I just want lab variables
+otherVars = NULL
+#otherVars = c("little_interest_doing","feeling_down","depression_sleep","low_energy","better_off_dead",
+#              "depression_appetite","low_self_esteem", "difficulty_concentrating", "depression_speech",
+#              "depression_difficulties")
+              #"alcohol_intake","total_vigorous_activity","total_moderate_activity","total_activity","caffeine_intake")
+#
+print(sprintf("dropping %d variables to be returned later:",length(otherVars)))
+print(otherVars)
+#vars = setdiff(vars,otherVars)
+varsDF = subset(varsDF,!(var%in%otherVars))
+
+
+#drop variasbles I can't find
+dropMe = setdiff(vars,colnames(X))
+print(sprintf("dropping %d variables I can't find:",length(dropMe)))
+print(dropMe)
+#vars = setdiff(vars,dropMe)
+varsDF = subset(varsDF,!(var%in%dropMe))
+```
+
+inspect all lab variables
+only SSSE2 has negative values and only 10, so just drop
+```{r}
+refRange = c(25,45) #updated oct 2025
+
+summaryDF = varsDF
+for (j in 1:nrow(summaryDF))
+{
+  logi = X[,"RIDAGEYR"] >= refRange[1] & X[,"RIDAGEYR"] <= refRange[2]
+  summaryDF[j,"Nf"]      = sum(!is.na(X[,summaryDF[j,"var"]]))
+  summaryDF[j,"Nfref"]   = sum(!is.na(X[logi,summaryDF[j,"var"]]))
+  summaryDF[j,"Nf0"]     = sum(X[,summaryDF[j,"var"]] <= 0,na.rm=T)
+  summaryDF[j,"Nf0ref"]  = sum(X[logi,summaryDF[j,"var"]] <= 0,na.rm=T)
+  summaryDF[j,"Nfneg"]   = sum(X[,summaryDF[j,"var"]] < 0,na.rm=T)
+  summaryDF[j,"prf0"]    = mean(X[,summaryDF[j,"var"]] <= 0,na.rm=T)
+  
+  logi = Xm[,"RIDAGEYR"] >= refRange[1] & Xm[,"RIDAGEYR"] <= refRange[2]
+  summaryDF[j,"Nm"]      = sum(!is.na(Xm[,summaryDF[j,"var"]]))
+  summaryDF[j,"Nmref"]   = sum(!is.na(Xm[logi,summaryDF[j,"var"]]))
+  summaryDF[j,"Nm0"]     = sum(Xm[,summaryDF[j,"var"]] <= 0,na.rm=T)
+  summaryDF[j,"Nmneg"]   = sum(Xm[,summaryDF[j,"var"]] < 0,na.rm=T)
+  summaryDF[j,"Nm0ref"]  = sum(Xm[logi,summaryDF[j,"var"]] <= 0,na.rm=T)
+  summaryDF[j,"prm0"]    = mean(Xm[,summaryDF[j,"var"]] <= 0,na.rm=T)
+}
+
+print((summaryDF[sort.list(-summaryDF$prf0),])[1:20,])
+```
+
+we have 0s... quite common in some variables
+
+preprocess & coalesce
+setup for imputation
+steps:
+1. figure out biggest donor, x
+2. figure out secondary, tertiary, etc
+3. coalesce from biggest to smallest donors, x_coalesced
+3. need: biggest donor (x), which donor (x_donor), coalesced (x_coalesced)
+4. add a bit of noise to z where x is known (say sd(x)/10)
+
+pool (coalesce) as needed
+```{r}
+dropOutliersZ = T
+zcut = c(-5,5) #extreme outliers (this takes sd AFTER normalization so sd can be > 1)
+###################preprocess (log scale and center)
+fvars = varsDF$var[apply(!is.na(X[,varsDF$var]),2,any)]
+mvars = varsDF$var[apply(!is.na(Xm[,varsDF$var]),2,any)]
+ppf = LogPreprocess(X[,c("RIDAGEYR",fvars)],vars=fvars,refRange = refRange,
+                    minN=20,ageCol="RIDAGEYR",dropOutliersZ=dropOutliersZ,zcut=zcut)
+ppf[[1]][,setdiff(varsDF$var,fvars)]=NA
+ppf[[2]][,"donateto"] = varsDF[ppf[[2]][,"var"],"donateTo"]
+ppm = LogPreprocess(Xm[,c("RIDAGEYR",mvars)],vars=mvars,refRange = refRange,
+                    minN=20,ageCol="RIDAGEYR",dropOutliersZ=dropOutliersZ,zcut=zcut)
+ppm[[1]][,setdiff(varsDF$var,mvars)]=NA
+ppm[[2]][,"donateto"] = varsDF[ppm[[2]][,"var"],"donateTo"]
+
+save=T
+if(save)
+{
+  write.csv(ppf[[2]],sprintf("%s/data/nhanes_menopause_preprocess_parameters_female.csv",outputDir))
+  write.csv(ppm[[2]],sprintf("%s/data/nhanes_menopause_preprocess_parameters_male.csv",outputDir))
+}
+ppfpar = ppf[[2]]
+ppmpar = ppm[[2]]
+ppf=ppf[[1]]
+ppm=ppm[[1]]
+
+###################coalesce
+
+#coalesceDFf = data.frame(Ndonated=NA,coalesced=NA)
+#coalesceDFm = data.frame(Ndonated=NA,coalesced=NA)
+coalescedVarsf  = character()
+NcoalescedVarsf = integer()
+coalescedVarsm  = character()
+NcoalescedVarsm = integer()
+pooledVars = data.frame(var=NA)
+ind = 1
+for (k in 1:length(systems)) #master loop for everything ##TEMPORARY CHANGES, also check below
+{
+
+  Bcode = read.csv(sprintf("%s/data/%s_biomarkers.csv",outputDir,systems[k]))
+  
+  #clean up Bcode
+  Bcode[Bcode==""] = NA
+  Bcode[Bcode=="NA"] = NA
+  ncols = colnames(Bcode)[grepl("NHANES",colnames(Bcode))]
+  logi = apply(!is.na(Bcode[,ncols]),1,any)
+  Bcode = Bcode[logi,]
+  rownames(Bcode)=Bcode[,"var"]
+  
+  for (i in 1:nrow(Bcode))
+  {
+    donors = as.character(Bcode[i,grep("NHANES",colnames(Bcode))])
+    donors = donors[!is.na(donors) & donors!="NA"]
+    
+    donorsf = intersect(donors,colnames(ppf))
+    Nf = 0
+    femaleFound=F
+    if(length(donorsf) > 0)
+    {
+      ppf = PoolVars2(ppf,cols=donorsf,colName=Bcode[i,"var"],minDonations = 100)
+      Nf = ppf[1,sprintf("%s_Ndonations",Bcode[i,"var"])]
+      if(ppf[1,sprintf("%s_anydonors",Bcode[i,"var"])]) 
+      {
+        coalescedVarsf = c(coalescedVarsf,Bcode[i,"var"])
+        NcoalescedVarsf = c(NcoalescedVarsf,ppf[1,sprintf("%s_Ndonations",Bcode[i,"var"])])
+      }
+      femaleFound = T
+    }
+    
+    donorsm = intersect(donors,colnames(ppm))
+    Nm = 0
+    maleFound=F
+    if(length(donorsm) > 0)
+    {
+      ppm = PoolVars2(ppm,cols=donorsm,colName=Bcode[i,"var"],minDonations = 100)
+      Nm = ppm[1,sprintf("%s_Ndonations",Bcode[i,"var"])]
+      if(ppm[1,sprintf("%s_anydonors",Bcode[i,"var"])]) 
+      {
+        coalescedVarsm = c(coalescedVarsm,Bcode[i,"var"])
+        NcoalescedVarsm = c(NcoalescedVarsm,ppm[1,sprintf("%s_Ndonations",Bcode[i,"var"])])
+      }
+      maleFound=T
+    }
+    
+    
+    pooledVars[ind,"var"] = Bcode[i,"var"]
+    pooledVars[ind,"NdonationsF"] = Nf
+    pooledVars[ind,"varFoundF"] = femaleFound
+    pooledVars[ind,"donorsF"] = ifelse(length(donorsf)>0, paste(donorsf,collapse=";"), NA)
+    pooledVars[ind,"NdonationsM"] = Nm
+    pooledVars[ind,"varFoundM"] = maleFound
+    pooledVars[ind,"donorsM"] = ifelse(length(donorsm)>0, paste(donorsm,collapse=";"), NA)
+    ind = ind+1
+  }
+
+  
+}
+coalesceDFf = data.frame(var=coalescedVarsf,N=NcoalescedVarsf)
+coalesceDFf = coalesceDFf[!duplicated(coalesceDFf$var),]
+rownames(coalesceDFf) = coalesceDFf[,"var"]
+
+coalesceDFm = data.frame(var=coalescedVarsm,N=NcoalescedVarsm)
+coalesceDFm = coalesceDFm[!duplicated(coalesceDFm$var),]
+rownames(coalesceDFm) = coalesceDFm[,"var"]
+
+save=T
+if(save)
+{
+  write.csv(coalesceDFf,sprintf("%s/data/nhanes_menopause_preprocess_coalesce_donors_female.csv",outputDir))
+  write.csv(coalesceDFm,sprintf("%s/data/nhanes_menopause_preprocess_coalesce_donors_male.csv",outputDir))
+  
+  write.csv(pooledVars,sprintf("%s/data/nhanes_menopause_preprocess_coalesce_summary.csv",outputDir))
+}
+```
+
+check log scaling & pooling (if pooled)
+```{r}
+mind = 1
+find = 1
+gm = list()
+gf = list()
+for (i in 1:nrow(pooledVars))
+{
+  if(pooledVars[i,"varFoundF"])
+  {
+    temp = ppf[,c(pooledVars[i,"var"],sprintf("%s_coalesce",pooledVars[i,"var"]),sprintf("%s_donated",pooledVars[i,"var"])),drop=F]
+    colnames(temp)=c("var","y","donated")
+    temp[,"donated"] = factor(temp[,"donated"],c(F,T),c("primary","secondary+"))
+    gf[[find]] = ggplot(temp,aes(x=y,colour=donated,fill=donated))+
+      geom_histogram(aes(y = after_stat(density)),position="identity",alpha=.4)+
+      geom_density(fill=NA)+
+      labs(x=pooledVars[i,"var"])+
+      theme_minimal(base_size=8)
+  
+    find =find +1
+  }
+  if(pooledVars[i,"varFoundM"])
+  {
+    temp = ppm[,c(pooledVars[i,"var"],sprintf("%s_coalesce",pooledVars[i,"var"]),sprintf("%s_donated",pooledVars[i,"var"])),drop=F]
+    colnames(temp)=c("var","y","donated")
+    temp[,"donated"] = factor(temp[,"donated"],c(F,T),c("primary","secondary+"))
+    gm[[mind]] = ggplot(temp,aes(x=y,colour=donated,fill=donated))+
+      geom_histogram(aes(y = after_stat(density)),position="identity",alpha=.4)+
+      geom_density(fill=NA)+
+      labs(x=pooledVars[i,"var"])+
+      theme_minimal(base_size=8)
+  
+    mind = mind+1
+  }
+  
+}
+  
+library(cowplot)
+glegf = cowplot::ggdraw(cowplot::get_legend(gf[[1]]))
+glegm = cowplot::ggdraw(cowplot::get_legend(gm[[1]]))
+
+for (i in 1:length(gf)) gf[[i]] = gf[[i]] + theme(legend.position="none")
+for (i in 1:length(gm)) gm[[i]] = gm[[i]] + theme(legend.position="none")
+
+save=F
+if(save)
+{
+  nrow=10
+  ncol=10
+  inds = 1:(nrow*ncol-1)
+  counter=1
+  while(length(inds)>0)
+  {
+    g = gf[inds]
+    g[[length(g)+1]] = glegf
+    #ggsave(sprintf("%s/results/%s%02d.png",outputDir,"nhanes_menopause_preprocessing_histogram_screen_female",counter),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL),width=16,height=16)
+    ggsave(sprintf("%s/results/%s%02d.pdf",outputDir,"nhanes_menopause_preprocessing_histogram_screen_female",counter),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL),width=16,height=16)
+    inds = inds+(nrow*ncol-1)
+    inds = inds[inds<=length(gf)]
+    counter = counter+1
+  }
+  
+  nrow=10
+  ncol=10
+  inds = 1:(nrow*ncol-1)
+  counter=1
+  while(length(inds)>0)
+  {
+    g = gm[inds]
+    g[[length(g)+1]] = glegm
+    #ggsave(sprintf("%s/results/%s%02d.png",outputDir,"nhanes_menopause_preprocessing_histogram_screen_male",counter),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL),width=16,height=16)
+    ggsave(sprintf("%s/results/%s%02d.pdf",outputDir,"nhanes_menopause_preprocessing_histogram_screen_male",counter),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL),width=16,height=16)
+    inds = inds+(nrow*ncol-1)
+    inds = inds[inds<=length(gm)]
+    counter = counter+1
+  }
+}
+```
+
+#add binary variables back in
+mortality
+notes:
+-a few hundred deaths within 1 year
+-everybody has at least 1 year of followup
+```{r}
+mort = read.csv("/home/glen/data/nhanes/nhanes_mortality_all_years.csv")
+rownames(mort) = mort[,"SEQN"]
+#table(demo[!is.na(datapp[,"status"]),"SDDSRVYR"]) 
+  # 5    8    9  #mortality_data.csv = nhanes0102.csv
+  #4541 4111  430 
+  #4    5    7    8   12 #nhanes03040506.csv
+  #4746 3252 4000 3998  456 
+  # 1     2     3     4     5     7     8     9    10    12    66  #nhanes_mortality_all_years.csv
+  #6742 11007 10105 10337 10132  7746 10155  9955  9231   479 11236 
+
+#mortality data
+X[,"stop"] = NA
+X[,"status"] = NA
+pts = intersect(rownames(mort),rownames(X))
+X[pts,"years_remaining"] = mort[pts,"years_remaining"]
+X[pts,"stop"] = X[pts,"years_remaining"] + X[pts,"RIDAGEYR"] + 1/365.25 #add a day to avoid irritating start = stop problems
+X[pts,"status"] = mort[pts,"status"]
+X[,"death_within_1year"] = dplyr::case_when(
+                          is.na(X[,"years_remaining"])      ~ NA_real_,
+                          is.na(X[,"status"])               ~ NA_real_,
+                          (X[,"years_remaining"] > 1)       ~ 0.0, #in followup for at least 1 year
+                          (X[,"status"] == 1) & (X[,"years_remaining"] < 1) ~ 1.0, #definitely died within 1 year
+                          (X[,"status"] == 0) & (X[,"years_remaining"] < 1) ~ NA_real_, #censored within 1 year - unknown if they died or not
+                          TRUE                           ~NA_real_)
+X[,"death_within_10year"] = dplyr::case_when(
+                          is.na(X[,"years_remaining"])      ~ NA_real_,
+                          is.na(X[,"status"])               ~ NA_real_,
+                          (X[,"years_remaining"] > 10)       ~ 0.0, #in followup for at least 10 year
+                          (X[,"status"] == 1) & (X[,"years_remaining"] < 10) ~ 1.0, #definitely died within 10 year
+                          (X[,"status"] == 0) & (X[,"years_remaining"] < 10) ~ NA_real_, #censored within 10 year - unknown if they died or not
+                          TRUE                           ~NA_real_)
+
+
+Xm[,"stop"] = NA
+Xm[,"status"] = NA
+pts = intersect(rownames(mort),rownames(Xm))
+Xm[pts,"years_remaining"] = mort[pts,"years_remaining"]
+Xm[pts,"stop"] = Xm[pts,"years_remaining"] + Xm[pts,"RIDAGEYR"] + 1/365.25
+Xm[pts,"status"] = mort[pts,"status"]
+Xm[,"death_within_1year"] = dplyr::case_when(
+                          is.na(Xm[,"years_remaining"])      ~ NA_real_,
+                          is.na(Xm[,"status"])               ~ NA_real_,
+                          (Xm[,"years_remaining"] > 1)       ~ 0.0, #in followup for at least 1 year
+                          (Xm[,"status"] == 1) & (Xm[,"years_remaining"] < 1) ~ 1.0, #definitely died within 1 year
+                          (Xm[,"status"] == 0) & (Xm[,"years_remaining"] < 1) ~ NA_real_, #censored within 1 year - unknown if they died or not
+                          TRUE                           ~NA_real_)
+Xm[,"death_within_10year"] = dplyr::case_when(
+                          is.na(Xm[,"years_remaining"])      ~ NA_real_,
+                          is.na(Xm[,"status"])               ~ NA_real_,
+                          (Xm[,"years_remaining"] > 10)       ~ 0.0, #in followup for at least 10 year
+                          (Xm[,"status"] == 1) & (Xm[,"years_remaining"] < 10) ~ 1.0, #definitely died within 10 year
+                          (Xm[,"status"] == 0) & (Xm[,"years_remaining"] < 10) ~ NA_real_, #censored within 10 year - unknown if they died or not
+                          TRUE                           ~NA_real_)
+```
+
+fi & deficits
+```{r}
+binVars = character()
+for (k in 1:length(systems)) #master loop for everything ##TEMPORARY CHANGES, also check below
+{
+
+  binVars = c(binVars,lBinVar[[systems[k]]])
+  
+}
+binVars = unique(binVars)
+
+ppf[,binVars] = X[,binVars]
+ppm[,binVars] = Xm[,binVars]
+
+
+#fivars
+ppf[,fiVar] = X[,fiVar]
+ppm[,fiVar] = Xm[,fiVar]
+binVars = c(binVars,fiVar)
+
+#menopause label
+ppf[,"menopause"] = X[,"menopause"]
+ppm[,"menopause"] = 0
+binVars = c(binVars,"menopause")
+
+#death
+deathCols = c("death_within_1year","death_within_10year")
+ppf[,deathCols] = X[,deathCols]
+ppm[,deathCols] = Xm[,deathCols]
+binVars = c(binVars,deathCols)
+
+#other binary variables
+otherBin = c("smoke_ever","smoke_now","insurance","poverty")
+ppf[,otherBin] = X[,otherBin]
+ppm[,otherBin] = Xm[,otherBin]
+binVars = c(binVars,otherBin)
+
+#make sure binarized and not logical
+for (j in 1:length(binVars))
+{
+  ppf[,binVars[j]] = 1.0*ppf[,binVars[j]]
+  ppm[,binVars[j]] = 1.0*ppm[,binVars[j]]
+}
+
+```
+
+FI - should help with imputation
+```{r}
+ppf[,"fi"]  = log(apply(X[,fiVar0],1,mean,na.rm=T)+.065)
+ppm[,"fi"]  = log(apply(Xm[,fiVar0],1,mean,na.rm=T)+.065)
+```
+
+Adjustment variables...
+```{r}
+adjVars = character()
+levs = c("<9th grade", "some high school", "high school grad", "some college","college grad")
+oh = OneHotVecOrdinal(ordered(X[,"educationf"],levs),rootname="education")
+ppf[,colnames(oh)] = oh
+oh = OneHotVecOrdinal(ordered(Xm[,"educationf"],levs),rootname="education")
+ppm[,colnames(oh)] = oh
+adjVars = c(adjVars,colnames(oh))
+
+levs = c("white", "black", "mexican", "other","other hispanic")
+oh = OneHotVec(factor(X[,"ethnicity"],levs),rootname="ethnicity")
+ppf[,colnames(oh)] = oh
+oh = OneHotVec(factor(Xm[,"ethnicity"],levs),rootname="ethnicity")
+ppm[,colnames(oh)] = oh
+adjVars = c(adjVars,colnames(oh))
+
+levs = c("USA","Mexico","Elsewhere")
+oh = OneHotVec(factor(X[,"birth_country"],levs),rootname="birth_country")
+ppf[,colnames(oh)] = oh
+oh = OneHotVec(factor(Xm[,"birth_country"],levs),rootname="birth_country")
+ppm[,colnames(oh)] = oh
+adjVars = c(adjVars,colnames(oh))
+
+ppf[,"early_menarche"] = as.numeric(as.character(X[,"menarchef"]))
+ppm[,"early_menarche"] = NA
+#adjVars = c(adjVars,"early_menarche")
+
+ppf[,"food_insecurity"] = X[,"foodInsecurity"]
+ppm[,"food_insecurity"] = Xm[,"foodInsecurity"]
+adjVars = c(adjVars,"food_insecurity")
+
+#fix columns names - whitespaces are a problem
+adjVars = unique(adjVars)
+for (j in 1:length(adjVars))
+{
+  if(any(grepl(" ",adjVars[j])))
+  {
+    newname = gsub(" ","_",adjVars[j],fixed=T)
+    colnames(ppf)[colnames(ppf)==adjVars[j]] = newname
+    colnames(ppm)[colnames(ppm)==adjVars[j]] = newname
+    adjVars[j] = newname
+  }
+}
+
+
+
+binVars = unique(c(binVars,adjVars))
+```
+
+HRT
+```{r}
+ppf[,"bin_hrt"]     = 1.0*(X[,"hrt"] == "any")
+ppf[,"bin_hrt_now"] = 1.0*(X[,"hrt_now"] == "yes")
+ppf[,"bin_ert"]     = 1.0*(X[,"ert"] == "estrogen")
+ppf[,"bin_mrt"]     = 1.0*(X[,"mrt"] %in% c("estrogen","combo","progestin") )
+ppf[,"bin_combo_mrt"]   = 1.0*(X[,"mrt"] == "combo" )
+ppf[,"bin_combo_mrt_now"] = 1.0*X[,"bin_combo_mrt_now"]
+ppf[,"bin_both_hrt"] = 1.0*X[,"both_hrt"]
+ppf[,"bin_both_hrt_now"] = 1.0*X[,"both_hrt_now"]
+#ppf[,"age_combo_hrt"] = 1.0*X[,"age_combo_hrt"]
+ppf[,"time_on_combo"] = 1.0*X[,"time_on_combo_hrt_units"]
+ppm[,"bin_hrt"] = NA
+ppm[,"bin_hrt_now"] = NA
+ppm[,"bin_ert"] = NA
+ppm[,"bin_mrt"] = NA
+ppm[,"bin_combo_mrt"]   = NA
+ppm[,"bin_combo_mrt_now"] = NA
+ppm[,"time_on_combo"] = NA
+ppm[,"bin_both_hrt"] = NA
+ppm[,"bin_both_hrt_now"] = NA
+binVars = unique(c(binVars,c("bin_hrt","bin_hrt_now","bin_ert","bin_mrt","bin_combo_mrt","bin_combo_mrt_now","bin_both_hrt","bin_both_hrt_now")))
+```
+
+Birth control pill & parity
+```{r}
+newVars = c("birth_control_pills_now","age_stopped_birth_control_pills","age_started_birth_control_pills","how_long_taking_birth_control_pills","parity")
+ppf[,newVars] = X[,newVars]
+
+ppm[,"birth_control_pills_now"] = NA
+ppm[,"age_stopped_birth_control_pills"] = NA
+ppm[,"age_started_birth_control_pills"] = NA
+ppm[,"how_long_taking_birth_control_pills"] = NA
+ppm[,"parity"] = NA
+
+binVarsF = unique(c(binVars,c("birth_control_pills_now")))
+```
+
+misc
+```{r}
+ppf[,"age_menarche"] = X[,"age_menarche"]
+ppm[,"age_menarche"] = NA
+```
+
+#impute
+remember special columns:
+-_coalesce contains latent estimate
+-_donor contains factor needed to get right transformation
+-only applies to a few variables, check coalesceDFf and coalesceDFm
+
+```{r}
+shared_non_na_counts <- function(mat) {
+  n <- ncol(mat)
+  shared_counts <- matrix(0, n, n, dimnames = list(colnames(mat), colnames(mat)))
+  
+  for (i in seq_len(n)) {
+    for (j in seq_len(i)) {  # Only compute lower triangle
+      shared_counts[i, j] <- sum(!is.na(mat[, i]) & !is.na(mat[, j]))
+      shared_counts[j, i] <- shared_counts[i, j]  # Symmetric
+    }
+  }
+  
+  return(shared_counts)
+}
+
+
+```
+
+
+
+
+#females
+coalesced vars
+```{r}
+mainVarsF = unique(subset(pooledVars,varFoundF)[,"var"])
+donorVarsF = sprintf("%s_donor",coalesceDFf[,"var"])
+coalesceVarsF =  sprintf("%s_coalesce",coalesceDFf[,"var"])
+contVarsF = c("parity","how_long_taking_birth_control_pills","age_started_birth_control_pills","age_stopped_birth_control_pills","age_menarche")
+```
+
+set predictor matrix - because tons of variables
+```{r}
+#auxVarsF = c("SEQN","age_menopause","survey_year") #other variables to include but not impute
+auxVarsF = c("SEQN","age_menopause","surveyf")
+includeNAMask=T #added Oct 2025
+if(includeNAMask)
+{
+  temp = c(mainVarsF,binVarsF)
+  for (j in 1:length(temp))
+  {
+    ppf[,sprintf("%s_namask",temp[j])] = 1*(is.na(ppf[,temp[j]]))
+  }
+  auxVarsF = c(auxVarsF,sprintf("%s_namask",temp))
+}
+
+ppf[,auxVarsF] = X[,setdiff(auxVarsF,colnames(ppf))]
+varsF = c("RIDAGEYR","fi",mainVarsF,binVarsF,donorVarsF,coalesceVarsF,auxVarsF,contVarsF)
+numVarsF = c("RIDAGEYR","fi",mainVarsF,binVarsF,contVarsF)
+```
+
+```{r}
+Nshared = shared_non_na_counts(ppf[,numVarsF])
+```
+
+criteria: - as before
+1. must share many observations (> 300 mutual observations)
+2. must have reasonably strong correlation
+3. must not be collinear
+4. must not be collinear among predictors (e.g. x~y+z where cor(y,z)=1 will drop y or z)
+5. max number of predictors of each variable is: maxPreds
+6. auxiliary variables will be excluded before mice is called
+```{r}
+vars = varsF
+numVars=numVarsF
+
+C = cor(ppf[,numVars],use='pairwise.complete')
+Nmin = 300 #minimum shared observations
+maxPreds = 30 #maximum number of predictors permitted
+
+if(!isTRUE(all.equal(rownames(C),rownames(Nshared)))) stop("C and Nshared not aligned")
+
+predictorMatrixF <- matrix(0, ncol = length(vars), nrow = length(vars))
+colnames(predictorMatrixF) <- vars
+rownames(predictorMatrixF) <- vars
+
+# use age and FI for all predictions #do I want to include FI?
+  #and menopause status! (for women)
+#predictorMatrixF[,c("RIDAGEYR","fi","menopause")] <- 1 
+predictorMatrixF[,c("RIDAGEYR","menopause")] <- 1   #adjustment, Oct 2025
+# use only top few correlations otherwise
+for (j in 1:nrow(C))
+{
+  logi = abs(C[j,]) > .25 & Nshared[j,] > Nmin & abs(C[j,]) < .97 #mice hates collinearity
+  logi[is.na(logi)] = F
+
+  #check for collinearity among predictors
+  rho = C[logi,logi]
+  rho[lower.tri(rho,diag=T)]=0
+  inds = which(rho>.8,arr.ind=T) #why such a low cut? #to avoid collinearity giving up
+  #inds = which(rho>.9,arr.ind=T) #update Oct 2025
+  if(length(inds)>0) #collinearity found
+  {
+    drop=character()
+    for (jj in 1:nrow(inds))
+    {
+      option1 = rownames(rho)[inds[jj,1]]
+      option2 = colnames(rho)[inds[jj,2]]
+      #pick the one with the most common observables
+      if(Nshared[j,option1] >= Nshared[j,option2]) drop = c(option2,drop)
+      else drop = c(option1,drop)
+    }
+    #drop collinear
+    logi[drop] = F
+  }
+  
+  #take top maxPreds
+  r = rank(-abs(C[j,logi])) #lower rank = better predictor
+  logi[logi][r > maxPreds] = F #only permit at most maxPreds
+  
+  predictorMatrixF[rownames(C)[j],colnames(C)[logi]] = 1
+  
+  #if(any(abs(C[j,logi])>.95))
+  #{
+  #  warning(sprintf("Collinearity detected for %s",colnames(ppm)[j]))
+  #}
+}
+
+#make sure auxiliary variables aren't included in imputation #moved later
+#predictorMatrix[auxVarsF,] = 0
+#predictorMatrix[,auxVarsF] = 0
+
+
+#no self-prediction...
+diag(predictorMatrixF) = 0
+```
+
+rules of thumb:
+Small data (< 1 000 rows): ≤ 15 predictors / model
+Medium (1 000–10 000): 20–40 predictors / model
+Large (> 10 000): use mice.impute.rf or mice.impute.cart; they handle larger sets but still pre-filter obvious junk.
+
+```{r}
+ggplot(data.frame(x=apply(predictorMatrixF,1,sum)),aes(x=x))+
+  geom_histogram()+
+  labs(x="Number of predictors")+
+  scale_x_log10()+
+  annotation_logticks(sides="b")+
+  theme_minimal()
+```
+
+make sure that coalesced variables have support
+remember special columns:
+-_coalesce contains latent estimate
+-_donor contains factor needed to get right transformation
+-only applies to a few variables, check coalesceDFf and coalesceDFm
+```{r}
+for (i in 1:nrow(coalesceDFf))
+{
+  if(sum(predictorMatrixF[,sprintf("%s_donor",coalesceDFf[i,"var"])])>0)
+  {
+    stop(sprintf("donor was incldued in predictor matrix somehow (???) (variable %s, number %d)",coalesceDFf[i,"var"],i))
+  }
+}
+```
+
+```{r}
+for (i in 1:nrow(coalesceDFf))
+{
+  #drop donor from everybody - this shouldn't be useful for any other variable
+  #predictorMatrix[,sprintf("%s_donor",coalesceDFf[i,"var"])] <- 0
+  
+  #add coalesce and donor to predictors
+  predictorMatrixF[coalesceDFf[i,"var"],sprintf("%s_coalesce",coalesceDFf[i,"var"])] <- 1
+  predictorMatrixF[coalesceDFf[i,"var"],sprintf("%s_donor",coalesceDFf[i,"var"])] <- 1
+  
+  #subtract main from predictors
+  predictorMatrixF[sprintf("%s_coalesce",coalesceDFf[i,"var"]),coalesceDFf[i,"var"]] <- 0
+  predictorMatrixF[sprintf("%s_donor",coalesceDFf[i,"var"]),coalesceDFf[i,"var"]] <- 0
+  
+  #factor donor
+  ppf[,sprintf("%s_donor",coalesceDFf[i,"var"])] = factor(ppf[,sprintf("%s_donor",coalesceDFf[i,"var"])])
+}
+
+```
+
+
+
+```{r}
+contModel="pmm" #not good but best so far
+#contModel="cart"
+#contModel="norm.boot" #DON'T USE, smudges out all jumps (because linear in time)
+binModel="logreg.boot" #logreg.boot  #cart #pmm #don't use logreg, it has touble with extrapolating and is just generally trouble
+#logreg: serious problems with extrapolation
+#logreg.boot: mostly good but occasionally goes crazy
+#cart: dysfunction doesn't convert to 0 (->0.1) at young ages, I guess because no menopause samples?
+#PMM: even worse convergence at young ages
+#lasso.logreg: slow but good #giving a bunch of warnings...
+
+library(mice)
+vars=varsF
+temp = ppf[,vars,drop=F]
+
+
+method = rep(contModel,length(vars))
+method[vars%in%donorVarsF] = "cart"
+#method[vars%in%binVarsF] = "logreg"
+method[vars%in%binVarsF] = binModel
+#for (j in 1:length(vars)) if(vars[j]%in%binVarsF) temp[,j] = temp[,j] > .5 #MICE wants logical 
+for (j in 1:length(vars)) if(vars[j]%in%binVarsF) temp[,j] = factor(1*temp[,j],c(0,1)) #MICE wants factors? 
+names(method)=vars
+
+
+#drop known pregnant
+micelogi = X[,"preg_now"] == 0 #not preg ok
+micelogi[is.na(micelogi)] = T #unknown ok
+
+#don't impute auxiliary variables
+method[auxVarsF] = ""
+#make sure auxiliary variables aren't included in imputation
+predictorMatrixF[auxVarsF,] = 0
+predictorMatrixF[,auxVarsF] = 0
+
+load=F
+save=T
+file = sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_females.rds",outputDir,contModel,binModel)
+if (file.exists(file) & load)
+{
+  print("file found, loading...")
+  mf = readRDS(file)
+} else
+{
+  #mf = mice(temp[logi,],method=method,predictorMatrix=predictorMatrixF,m=1,maxit=2) #for debuggin
+  mf = mice(temp[micelogi,],method=method,predictorMatrix=predictorMatrixF,m=15,maxit=5)
+
+  save=T
+  if(save)
+  {
+    saveRDS(mf,file)
+  }
+
+}
+
+
+
+#ADD AGE OF MENOPAUSE
+#WITH IMPUTED AGE OF MENOPAUSE
+rm(Xmmi)
+#reshape and impute age of menopause
+Xmmi = mf
+Xmmi$complete = list() #easier to access complete data
+for (i in 1:mf$m) 
+{
+  Xmmi$complete[[i]] = mice::complete(mf,i)
+  
+  for (j in 1:length(binVarsF)) #strip factors
+  {
+   Xmmi$complete[[i]][,binVarsF[j]] = as.integer(as.character(Xmmi$complete[[i]][,binVarsF[j]])) 
+  }
+}
+
+#add var vectors to keep track
+Xmmi[["vars"]]         = vars
+Xmmi[["auxVars"]]      = auxVarsF
+Xmmi[["mainVars"]]     = mainVarsF
+Xmmi[["binVars"]]      = binVarsF
+Xmmi[["donorVars"]]    = donorVarsF
+Xmmi[["coalesceVars"]] = coalesceVarsF
+
+Xmmi2 = Xmmi
+
+#1. age of menopause using distribution
+#now impute age of menopause
+  start  = rep(0,nrow(X))
+  stop   = X[,"age_menopause"]
+  status = X[,"menopause"]
+  logi = status==0
+  logi[is.na(logi)] = F
+  stop[logi] = X[logi,"RIDAGEYR"]
+  #assume any non-menopause past age 60 is an error
+  stop[stop > 60] = 60
+  smeno = Surv(start,stop,status)
+  
+smenosm=smeno
+smoothMenoDist = TRUE
+if(smoothMenoDist)
+{
+  library(survPen)
+  logi = !is.na(smeno[,2]) &!is.na(smeno[,3])
+  fit = survPen(~t,data.frame(t=smeno[logi,2],event=smeno[logi,3]),event=event,t1=t)
+  menopause_ages = seq(min(smeno[,2],na.rm=T),max(smeno[,2],na.rm=T),by=.1)
+  spr = predict(fit,data.frame(t=menopause_ages),strata=NULL)
+  pz0 = spr$surv*spr$haz
+  tsamp = sample(menopause_ages,size=1e5,replace=T,prob=pz0)
+  smenosm = Surv(tsamp) #update smeno with smoothed time
+}
+
+
+#risk model 
+riskVars = c(
+          #"poverty", #often missing #unimportant #can change with age
+         "smoke_daily",
+         "education_some_college", #others don't seem to matter much
+         "ethnicity_black","ethnicity_mexican","ethnicity_other","ethnicity_other_hispanic",
+         "birth_country_Mexico","birth_country_Elsewhere", #often missing
+         "age_menarche" #often missing
+         #"parity", #often missing #overfit
+         #"ovaries_removed" #most important variable #often missing #handle separately
+         )
+NRiskQuantiles = 5
+#fit model
+  oophLogi = ppf[,"ovaries_removed"]==1
+  oophLogi[is.na(oophLogi)]=F
+mod = coxph(smeno[!oophLogi,]~.,ppf[!oophLogi,riskVars,drop=F]) 
+
+#impute
+for (k in 1:mf$m) 
+{
+  status = as.integer(as.character(mice::complete(mf,k)[,"menopause"])) #drop type
+  temp = SampleMenopause(s=smenosm,age=Xmmi$complete[[k]][,"RIDAGEYR"],stop=mice::complete(mf,k)[,"age_menopause"],status=status,m=1)
+  Xmmi$complete[[k]][,"age_menopause0"] = temp[[1]][,"age_menopause"]
+  Xmmi$complete[[k]][,"menopause0"]     = temp[[1]][,"menopause"]
+  Xmmi$complete[[k]][,"time_since_menopause0"] = Xmmi$complete[[k]][,"RIDAGEYR"]-Xmmi$complete[[k]][,"age_menopause0"]
+  rm(temp)
+  
+    #stratified by oophorectomies
+  oophLogimi = Xmmi$complete[[k]][,"ovaries_removed"]==1
+  oophLogimi[is.na(oophLogimi)]=F
+  status = as.integer(as.character(mice::complete(mf,k)[,"menopause"])) #drop type
+  temp = SampleMenopause(s=smeno,age=Xmmi$complete[[k]][,"RIDAGEYR"],stop=mice::complete(mf,k)[,"age_menopause"],status=status,m=1,trainStratifyVar=factor(oophLogi,c(T,F)),stratifyVar=factor(oophLogimi,c(T,F)))
+  Xmmi$complete[[k]][,"age_menopause"] = temp[[1]][,"age_menopause"]
+  Xmmi$complete[[k]][,"menopause"]     = temp[[1]][,"menopause"]
+  Xmmi$complete[[k]][,"time_since_menopause"] = Xmmi$complete[[k]][,"RIDAGEYR"]-Xmmi$complete[[k]][,"age_menopause"]
+  rm(temp)
+  
+  #risk-stratified estimate
+  #divides into quantiles and then stratifies and imputes
+  lp = predict(mod,ppf,se.fit=TRUE)
+  trainStratifyVar = lp[[1]]+rnorm(length(lp[[1]]),0,lp[[2]])
+  riskCuts = quantile(trainStratifyVar,seq(0,1,length=NRiskQuantiles+1),na.rm=T)
+  names(riskCuts)=sprintf("Q%02d",1:length(riskCuts)-1)
+  trainStratifyVar = cut(trainStratifyVar,riskCuts,names(riskCuts)[-1],include.lowest=TRUE)
+  trainStratifyVar = factor(trainStratifyVar,c(levels(trainStratifyVar),"ovaries_removed"))
+  trainStratifyVar[oophLogi] = "ovaries_removed"
+  lp = predict(mod,Xmmi$complete[[k]],type="lp",se.fit=TRUE)
+  lp[[1]][is.na(lp[[1]])]=mean(lp[[1]],na.rm=T) #impute missing values
+  lp[[2]][is.na(lp[[2]])]=mean(lp[[2]],na.rm=T)
+  #stratify by risk
+  stratifyVar = lp[[1]]+rnorm(length(lp[[1]]),0,lp[[2]])
+  #stratifyVar = cut(stratifyVar,quantile(stratifyVar,seq(0,1,length=NRiskQuantiles+1)),include.lowest=TRUE)
+  stratifyVar = cut(stratifyVar,riskCuts,names(riskCuts)[-1],include.lowest=TRUE)
+  stratifyVar = factor(stratifyVar,c(levels(stratifyVar),"ovaries_removed"))
+  stratifyVar[oophLogimi] = "ovaries_removed"
+  status = as.integer(as.character(mice::complete(mf,k)[,"menopause"])) #drop type
+  temp = SampleMenopause(s=smeno,age=Xmmi$complete[[k]][,"RIDAGEYR"],stop=mice::complete(mf,k)[,"age_menopause"],status=status,m=1,trainStratifyVar=trainStratifyVar,stratifyVar=stratifyVar)
+  Xmmi$complete[[k]][,"age_menopause2"] = temp[[1]][,"age_menopause"]
+  Xmmi$complete[[k]][,"menopause2"]     = temp[[1]][,"menopause"]
+  Xmmi$complete[[k]][,"time_since_menopause2"] = Xmmi$complete[[k]][,"RIDAGEYR"]-Xmmi$complete[[k]][,"age_menopause2"]
+  rm(temp)
+}
+
+save=T
+if(save)
+{
+  if(smoothMenoDist) saveRDS(Xmmi,sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_females_with_age_of_menopause_smooth.rds",outputDir,contModel,binModel)) #note: only changes age_menopause0
+  else saveRDS(Xmmi,sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_females_with_age_of_menopause.rds",outputDir,contModel,binModel))
+}
+
+#version 2. use latent variable model with bootstrapping to get better estimates
+#how it works:
+  #1. use imputed data for everything (i.e. oophorectomy status) except menopause status and age menopause (use unimputed for those)
+  #2. fit model for surgical menopause (oophorectomies) and non separately
+  #3. constrain proposal distribution based on your knowledge of menopause status and age
+strata = X[,"ovaries_removed"]
+strata[is.na(strata)] = 2
+fit0 = FitLatentFun(X[strata==0,],vars=NULL,nboot=25)
+fit1 = FitLatentFun(X[strata==1,],vars=NULL,nboot=25)
+
+epsilon=1e-8
+age_menopause_sd=1
+#menoShift=1.01 #because FMP is retroactive #looks wrong
+menoShift=0.01 #trying
+for (k in 1:mf$m) 
+{
+  
+  #apply survival constraints #do for everybody then split test/train later
+  for (ii in 1:nrow(Xmmi2$complete[[k]]))
+  {
+    #stratified by oophorectomies
+    if(is.na(Xmmi2$complete[[k]][ii,"ovaries_removed"])) #unknown ooph status
+    {
+      tref = fit0$control$menopause_ages #assume no
+        pz0 = as.numeric(fit0$pz00[1,])
+        pz0 = pz0 + epsilon #to prevent 0s
+    } else if(Xmmi2$complete[[k]][ii,"ovaries_removed"]==1) #had ooph
+    {
+        tref = fit1$control$menopause_ages
+        pz0 = as.numeric(fit1$pz00[1,])
+        pz0 = pz0 + epsilon #to prevent 0s
+    } else #did not have ooph
+    {
+      tref = fit0$control$menopause_ages
+        pz0 = as.numeric(fit0$pz00[1,])
+        pz0 = pz0 + epsilon #to prevent 0s
+    }
+    
+    if(is.na(Xmmi2$data[ii,"menopause"]))
+    {
+      #do nothing to constrain proposal distribution
+    } else if(Xmmi2$data[ii,"menopause"]==0)
+    {
+      pz0[tref <= Xmmi2$data[ii,"RIDAGEYR"]-menoShift] = 0 #menopause hasn't happened yet! #-menoShift because retroactive
+    } else          pz0[tref >= Xmmi2$data[ii,"RIDAGEYR"]-menoShift] = 0   #-menoShift because retroactive
+        
+    if(!is.na(Xmmi2$data[ii,"age_menopause"])) #age of menopause is known
+    {
+      pz0 = 0
+      pz0 = dnorm(tref,Xmmi2$data[ii,"age_menopause"],age_menopause_sd) 
+    }
+    pz0 = pz0/sum(pz0)
+    
+    #now sample
+    Xmmi2$complete[[k]][ii,"age_menopause"]        = sample(tref,size=1,prob=pz0)
+    Xmmi2$complete[[k]][ii,"time_since_menopause"] = Xmmi2$complete[[k]][ii,"RIDAGEYR"]-Xmmi2$complete[[k]][ii,"age_menopause"]
+    Xmmi2$complete[[k]][ii,"menopause"]            = 1*(Xmmi2$complete[[k]][ii,"time_since_menopause"]>=0)
+  }
+}
+
+save=T
+if(save)
+{
+  saveRDS(Xmmi2,sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_females_with_age_of_menopause_v2.rds",outputDir,contModel,binModel))
+}
+rm(Xmmi2)
+```
+
+#males
+coalesced vars
+```{r}
+mainVarsM     = unique(subset(pooledVars,varFoundM)[,"var"])
+donorVarsM    = sprintf("%s_donor",coalesceDFm[,"var"])
+coalesceVarsM =  sprintf("%s_coalesce",coalesceDFm[,"var"])
+```
+
+set predictor matrix - because tons of variables
+```{r}
+#auxVarsM = c("SEQN","age_menopause","survey_year") #other variables to include but not impute
+auxVarsM = c("SEQN","age_menopause","surveyf")
+includeNAMask=T #added Oct 2025
+if(includeNAMask)
+{
+  temp = c(mainVarsM,binVars)
+  for (j in 1:length(temp))
+  {
+    Xm[,sprintf("%s_namask",temp[j])] = 1*(is.na(ppm[,temp[j]]))
+  }
+  auxVarsM = c(auxVarsM,sprintf("%s_namask",temp))
+}
+
+
+Xm[,"age_menopause"] = NA
+ppm[,auxVarsM] = Xm[,setdiff(auxVarsM,colnames(ppm))]
+varsM = c("RIDAGEYR","fi",mainVarsM,binVars,donorVarsM,coalesceVarsM,auxVarsM)
+numVarsM = c("RIDAGEYR","fi",mainVarsM,binVars)
+```
+
+criteria:
+1. must share many observations (> 300 mutual observations)
+2. must have reasonably strong correlation
+3. must not be collinear
+4. must not be collinear among predictors (e.g. x~y+z where cor(y,z)=1 will drop y or z)
+5. max number of predictors of each variable is: maxPreds
+6. auxiliary variables will be excluded before mice is called
+```{r}
+Nshared = shared_non_na_counts(ppm[,numVarsM])
+```
+
+```{r}
+vars = varsM
+numVars=numVarsM
+
+C = cor(ppm[,numVars],use='pairwise.complete')
+Nmin = 300 #minimum shared observations
+maxPreds = 30 #maximum number of predictors permitted
+
+if(!isTRUE(all.equal(rownames(C),rownames(Nshared)))) stop("C and Nshared not aligned")
+
+predictorMatrix <- matrix(0, ncol = length(vars), nrow = length(vars))
+colnames(predictorMatrix) <- vars
+rownames(predictorMatrix) <- vars
+
+# use age and FI for all predictions #do I want to include FI?
+  #and menopause status! (for women)
+#predictorMatrix[,c("RIDAGEYR","fi")] <- 1 
+predictorMatrix[,c("RIDAGEYR")] <- 1  #adjustment, Oct 2025
+# use only top few correlations otherwise
+for (j in 1:nrow(C))
+{
+  logi = abs(C[j,]) > .25 & Nshared[j,] > Nmin & abs(C[j,]) < .97 #mice hates collinearity
+  logi[is.na(logi)] = F
+
+  #check for collinearity among predictors
+  rho = C[logi,logi]
+  rho[lower.tri(rho,diag=T)]=0
+  inds = which(rho>.8,arr.ind=T) #why such a low cut?
+  #inds = which(rho>.9,arr.ind=T) #update Oct 2025
+  if(length(inds)>0) #collinearity found
+  {
+    drop=character()
+    for (jj in 1:nrow(inds))
+    {
+      option1 = rownames(rho)[inds[jj,1]]
+      option2 = colnames(rho)[inds[jj,2]]
+      #pick the one with the most common observables
+      if(Nshared[j,option1] >= Nshared[j,option2]) drop = c(option2,drop)
+      else drop = c(option1,drop)
+    }
+    #drop collinear
+    logi[drop] = F
+  }
+  
+  #take top maxPreds
+  r = rank(-abs(C[j,logi])) #lower rank = better predictor
+  logi[logi][r > maxPreds] = F #only permit at most maxPreds
+  
+  predictorMatrix[rownames(C)[j],colnames(C)[logi]] = 1
+  
+  #if(any(abs(C[j,logi])>.95))
+  #{
+  #  warning(sprintf("Collinearity detected for %s",colnames(ppm)[j]))
+  #}
+}
+
+#no self-prediction...
+diag(predictorMatrix) = 0
+```
+rules of thumb:
+Small data (< 1 000 rows): ≤ 15 predictors / model
+Medium (1 000–10 000): 20–40 predictors / model
+Large (> 10 000): use mice.impute.rf or mice.impute.cart; they handle larger sets but still pre-filter obvious junk.
+
+```{r}
+ggplot(data.frame(x=apply(predictorMatrix,1,sum)),aes(x=x))+
+  geom_histogram()+
+  labs(x="Number of predictors")+
+  scale_x_log10()+
+  annotation_logticks(sides="b")+
+  theme_minimal()
+
+print(head(sort(apply(predictorMatrix,1,sum))))
+print(tail(sort(apply(predictorMatrix,1,sum))))
+```
+
+
+atg make me suspicious... very non-gaussian
+```{r}
+#predictorMatrix[,"atg"] = 0 #don't allow atg to predict
+which(predictorMatrix[,"atg"]>0)
+```
+
+make sure that coalesced variables have support
+remember special columns:
+-_coalesce contains latent estimate
+-_donor contains factor needed to get right transformation
+-only applies to a few variables, check coalesceDFf and coalesceDFm
+```{r}
+for (i in 1:nrow(coalesceDFm))
+{
+  if(sum(predictorMatrix[,sprintf("%s_donor",coalesceDFm[i,"var"])])>0)
+  {
+    print(predictorMatrix[,sprintf("%s_donor",coalesceDFm[i,"var"])])
+    stop(sprintf("donor was incldued in predictor matrix somehow (???) (variable %s, number %d)",coalesceDFm[i,"var"],i))
+  }
+}
+```
+
+```{r}
+for (i in 1:nrow(coalesceDFm))
+{
+  #drop donor from everybody - this shouldn't be useful for any other variable
+  #predictorMatrix[,sprintf("%s_donor",coalesceDFm[i,"var"])] <- 0 #this shouldn't happen!
+  
+  #add coalesce and donor to predictors
+  predictorMatrix[coalesceDFm[i,"var"],sprintf("%s_coalesce",coalesceDFm[i,"var"])] <- 1
+  predictorMatrix[coalesceDFm[i,"var"],sprintf("%s_donor",coalesceDFm[i,"var"])] <- 1
+  
+  #subtract main from predictors
+  predictorMatrix[sprintf("%s_coalesce",coalesceDFm[i,"var"]),coalesceDFm[i,"var"]] <- 0
+  predictorMatrix[sprintf("%s_donor",coalesceDFm[i,"var"]),coalesceDFm[i,"var"]] <- 0
+  
+  #factor donor
+  ppm[,sprintf("%s_donor",coalesceDFm[i,"var"])] = factor(ppm[,sprintf("%s_donor",coalesceDFm[i,"var"])])
+}
+
+```
+
+
+
+some donors get dropped due to collinearity, I think this means they are perfectly reconstructed by the coalesced + primary contributor; in which case that's fine, it means all donors look the same (and is kinda expected)
+```{r}
+contModel="pmm"
+binModel="logreg.boot"
+temp = ppm[,vars,drop=F]
+
+library(mice)
+vars=varsM
+method = rep(contModel,length(vars))
+method[vars%in%donorVarsM] = "cart"
+method[vars%in%binVars] = binModel
+#for (j in 1:length(vars)) if(vars[j]%in%binVars) temp[,j] = temp[,j] > .5 #MICE wants logical 
+for (j in 1:length(vars)) if(vars[j]%in%binVars) temp[,j] = factor(1*temp[,j],c(0,1)) #MICE wants factors? 
+names(method)=vars
+
+#don't impute auxiliary variables
+method[auxVarsM] = ""
+#make sure auxiliary variables aren't included in imputation
+predictorMatrix[auxVarsM,] = 0
+predictorMatrix[,auxVarsM] = 0
+
+#don't impute hrt stuff for males...
+method[c("bin_hrt","bin_hrt_now")] = ""
+#make sure auxiliary variables aren't included in imputation
+predictorMatrix[c("bin_hrt","bin_hrt_now"),] = 0
+predictorMatrix[,c("bin_hrt","bin_hrt_now")] = 0
+
+
+
+
+
+load=F
+save=T
+file = sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_males.rds",outputDir,contModel,binModel)
+if (file.exists(file))
+{
+  print("file found, loading...")
+  m = readRDS(file)
+} else
+{
+  #m = mice(temp,method=method,predictorMatrix=predictorMatrix,m=2,maxit=2) #for debuggin
+  m = mice(temp,method=method,predictorMatrix=predictorMatrix,m=15,maxit=5)
+
+  save=T
+  if(save)
+  {
+    saveRDS(m,file)
+  }
+
+}
+
+
+#ADD AGE OF MENOPAUSE
+#WITH IMPUTED AGE OF MENOPAUSE
+
+#reshape and impute age of menopause
+Xmmi = m
+Xmmi$complete = list() #easier to access complete data
+for (i in 1:m$m) 
+{
+  Xmmi$complete[[i]] = mice::complete(m,i)
+  for (j in 1:length(binVars)) #strip factors
+  {
+   Xmmi$complete[[i]][,binVars[j]] = as.integer(as.character(Xmmi$complete[[i]][,binVars[j]])) 
+  }
+}
+
+#add var vectors to keep track
+Xmmi[["vars"]]         = vars
+Xmmi[["auxVars"]]      = auxVarsM
+Xmmi[["mainVars"]]     = mainVarsM
+Xmmi[["binVars"]]      = binVars
+Xmmi[["donorVars"]]    = donorVarsM
+Xmmi[["coalesceVars"]] = coalesceVarsM
+
+
+Xmmi2 = Xmmi
+Xmmi3 = Xmmi
+
+#version 1. using old algorithm
+#now impute age of menopause
+start  = rep(0,nrow(X))
+stop   = X[,"age_menopause"]
+status = X[,"menopause"]
+logi = status==0
+logi[is.na(logi)] = F
+stop[logi] = X[logi,"RIDAGEYR"]
+#assume any non-menopause past age 60 is an error
+stop[stop > 60] = 60
+smeno = Surv(start,stop,status)
+
+#risk model
+riskVars = c(
+          #"poverty", #often missing #unimportant #can change with age
+         "smoke_daily",
+         "education_some_college", #others don't seem to matter much
+         "ethnicity_black","ethnicity_mexican","ethnicity_other","ethnicity_other_hispanic",
+         "birth_country_Mexico","birth_country_Elsewhere" #often missing
+         #"age_menarche" #often missing
+         #"parity", #often missing #overfit
+         #"ovaries_removed" #most important variable #often missing #handle separately
+         )
+NRiskQuantiles = 5
+#fit model
+  oophLogi = ppf[,"ovaries_removed"]==1
+  oophLogi[is.na(oophLogi)]=F
+mod = coxph(smeno[!oophLogi,]~.,ppf[!oophLogi,riskVars,drop=F])    
+
+#impute
+for (k in 1:length(Xmmi$complete))
+{
+  #status = as.integer(as.character(Xmmi$complete[[k]][,"menopause"])) #drop type
+  status = rep(NA,nrow(Xmmi$complete[[k]])) #all NAs because males
+  temp = SampleMenopause(s=smeno,age=Xmmi$complete[[k]][,"RIDAGEYR"],stop=status,status=status,m=1)
+  Xmmi$complete[[k]][,"age_menopause0"] = temp[[1]][,"age_menopause"]
+  Xmmi$complete[[k]][,"menopause0"]     = temp[[1]][,"menopause"]
+  Xmmi$complete[[k]][,"time_since_menopause0"] = Xmmi$complete[[k]][,"RIDAGEYR"]-Xmmi$complete[[k]][,"age_menopause0"]
+  
+  #stratified by oophorectomies
+  oophLogimi = Xmmi$complete[[k]][,"ovaries_removed"]==1
+  oophLogimi[is.na(oophLogimi)]=F
+  temp = SampleMenopause(s=smeno,age=Xmmi$complete[[k]][,"RIDAGEYR"],stop=status,status=status,m=1,trainStratifyVar=factor(oophLogi,c(T,F)),stratifyVar=factor(oophLogimi,c(T,F)))
+  Xmmi$complete[[k]][,"age_menopause"] = temp[[1]][,"age_menopause"]
+  Xmmi$complete[[k]][,"menopause"]     = temp[[1]][,"menopause"]
+  Xmmi$complete[[k]][,"time_since_menopause"] = Xmmi$complete[[k]][,"RIDAGEYR"]-Xmmi$complete[[k]][,"age_menopause"]
+  
+  #risk-stratified estimate
+  #divides into quantiles and then stratifies and imputes
+  lp = predict(mod,ppf,se.fit=TRUE)
+  trainStratifyVar = lp[[1]]+rnorm(length(lp[[1]]),0,lp[[2]])
+  riskCuts = quantile(trainStratifyVar,seq(0,1,length=NRiskQuantiles+1),na.rm=T)
+  names(riskCuts)=sprintf("Q%02d",1:length(riskCuts)-1)
+  trainStratifyVar = cut(trainStratifyVar,riskCuts,names(riskCuts)[-1],include.lowest=TRUE)
+  trainStratifyVar = factor(trainStratifyVar,c(levels(trainStratifyVar),"ovaries_removed"))
+  trainStratifyVar[oophLogi] = "ovaries_removed"
+  lp = predict(mod,Xmmi$complete[[k]],type="lp",se.fit=TRUE)
+  lp[[1]][is.na(lp[[1]])]=mean(lp[[1]],na.rm=T) #impute missing values
+  lp[[2]][is.na(lp[[2]])]=mean(lp[[2]],na.rm=T)
+  #stratify by risk
+  stratifyVar = lp[[1]]+rnorm(length(lp[[1]]),0,lp[[2]])
+  #stratifyVar = cut(stratifyVar,quantile(stratifyVar,seq(0,1,length=NRiskQuantiles+1)),include.lowest=TRUE)
+  stratifyVar = cut(stratifyVar,riskCuts,names(riskCuts)[-1],include.lowest=TRUE)
+  stratifyVar = factor(stratifyVar,c(levels(stratifyVar),"ovaries_removed"))
+  stratifyVar[oophLogimi] = "ovaries_removed"
+  temp = SampleMenopause(s=smeno,age=Xmmi$complete[[k]][,"RIDAGEYR"],stop=status,status=status,m=1,trainStratifyVar=trainStratifyVar,stratifyVar=stratifyVar)
+  Xmmi$complete[[k]][,"age_menopause2"] = temp[[1]][,"age_menopause"]
+  Xmmi$complete[[k]][,"menopause2"]     = temp[[1]][,"menopause"]
+  Xmmi$complete[[k]][,"time_since_menopause2"] = Xmmi$complete[[k]][,"RIDAGEYR"]-Xmmi$complete[[k]][,"age_menopause2"]
+}
+
+save=T
+if(save)
+{
+  saveRDS(Xmmi,sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_males_with_age_of_menopause.rds",outputDir,contModel,binModel))
+}
+
+#version 2. use latent variable model with bootstrapping to get better estimates
+#how it works:
+  #1. use imputed data for everything (i.e. oophorectomy status) except menopause status and age menopause (use unimputed for those)
+  #2. fit model for surgical menopause (oophorectomies) and non separately
+  #3. constrain proposal distribution based on your knowledge of menopause status and age
+
+for (k in 1:mf$m) 
+{
+  
+  #apply survival constraints #do for everybody then split test/train later
+  for (ii in 1:nrow(Xmmi2$complete[[k]]))
+  {
+    #nobody has oophorectomies and nobody has known status (males!)
+    tref = fit0$control$menopause_ages
+    pz0 = as.numeric(fit0$pz00[1,])
+    pz0 = pz0 + epsilon #to prevent 0s
+    
+    #now sample
+    Xmmi2$complete[[k]][ii,"age_menopause"]        = sample(tref,size=1,prob=pz0)
+    Xmmi2$complete[[k]][ii,"time_since_menopause"] = Xmmi2$complete[[k]][ii,"RIDAGEYR"]-Xmmi2$complete[[k]][ii,"age_menopause"]
+    Xmmi2$complete[[k]][ii,"menopause"]            = 1*(Xmmi2$complete[[k]][ii,"time_since_menopause"]>=0)
+  }
+}
+
+save=T
+if(save)
+{
+  saveRDS(Xmmi2,sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_males_with_age_of_menopause_v2.rds",outputDir,contModel,binModel))
+}
+rm(Xmmi2)
+
+
+#version 3. pick menopause status ONCE then repeat as before
+  #mimic the real data
+refData = data.frame(RIDAGEYR=Xm[,"RIDAGEYR"],menopause=NA,age_menopause=NA,time_since_menopause=NA)
+for (ii in 1:nrow(refData)) 
+{
+  #nobody has oophorectomies and nobody has known status (males!)
+  tref = fit0$control$menopause_ages
+  pz0 = as.numeric(fit0$pz00[1,])
+  pz0 = pz0 + epsilon #to prevent 0s
+  
+  #now sample
+  refData[ii,"age_menopause"]        = sample(tref,size=1,prob=pz0)
+  refData[ii,"time_since_menopause"] = refData[ii,"RIDAGEYR"]-refData[ii,"age_menopause"]
+  refData[ii,"menopause"]            = 1*(refData[ii,"time_since_menopause"]>=0)
+} 
+#now apply appropriate missingness to match females
+refData[refData[,"menopause"]==0,"age_menopause"] = NA #hide those not yet menopausal
+#randomly drop some
+inds = sample(1:nrow(refData),nrow(refData)*mean(is.na(X[,"menopause"])))
+refData[inds,"menopause"] = NA
+#randomly drop some age of menopause 
+#those with known menopause
+r = mean(is.na(subset(X,!is.na(menopause) & menopause==1)[,"age_menopause"]))
+inds = which(refData[,"menopause"]==1)
+inds = sample(inds,length(inds)*r)
+refData[inds,"age_menopause"] = NA
+
+  
+#now impute the rest
+for (k in 1:mf$m) 
+{
+  
+  #apply survival constraints #do for everybody then split test/train later
+  for (ii in 1:nrow(Xmmi3$complete[[k]]))
+  {
+    #stratified by oophorectomies
+    if(is.na(Xmmi3$complete[[k]][ii,"ovaries_removed"])) #unknown ooph status
+    {
+      tref = fit0$control$menopause_ages #assume no
+        pz0 = as.numeric(fit0$pz00[1,])
+        pz0 = pz0 + epsilon #to prevent 0s
+    } else if(Xmmi3$complete[[k]][ii,"ovaries_removed"]==1) #had ooph
+    {
+        tref = fit1$control$menopause_ages
+        pz0 = as.numeric(fit1$pz00[1,])
+        pz0 = pz0 + epsilon #to prevent 0s
+    } else #did not have ooph
+    {
+      tref = fit0$control$menopause_ages
+        pz0 = as.numeric(fit0$pz00[1,])
+        pz0 = pz0 + epsilon #to prevent 0s
+    }
+    
+    if(is.na(refData[ii,"menopause"]))
+    {
+      #do nothing to constrain proposal distribution
+    } else if(refData[ii,"menopause"]==0)
+    {
+      pz0[tref <= refData[ii,"RIDAGEYR"]-menoShift] = 0 #menopause hasn't happened yet! #-menoShift because retroactive
+    } else          pz0[tref >= refData[ii,"RIDAGEYR"]-menoShift] = 0   #-menoShift because retroactive
+        
+    if(!is.na(refData[ii,"age_menopause"])) #age of menopause is known
+    {
+      pz0 = 0
+      pz0 = dnorm(tref,refData[ii,"age_menopause"],age_menopause_sd) 
+    }
+    pz0 = pz0/sum(pz0)
+    
+    #now sample
+    Xmmi3$complete[[k]][ii,"age_menopause"]        = sample(tref,size=1,prob=pz0)
+    Xmmi3$complete[[k]][ii,"time_since_menopause"] = Xmmi3$complete[[k]][ii,"RIDAGEYR"]-Xmmi3$complete[[k]][ii,"age_menopause"]
+    Xmmi3$complete[[k]][ii,"menopause"]            = 1*(Xmmi3$complete[[k]][ii,"time_since_menopause"]>=0)
+  }
+}
+
+save=T
+if(save)
+{
+  saveRDS(Xmmi3,sprintf("%s/data/nhanes_menopause_preprocessed_imputed_%s_%s_males_with_age_of_menopause_v3.rds",outputDir,contModel,binModel))
+}
+rm(Xmmi3)
+```
+
+#pregnant women because... why not
+```{r}
+library(mice)
+vars=varsF
+temp = ppf[,vars,drop=F]
+
+
+method = rep("pmm",length(vars))
+method[vars%in%donorVarsF] = "cart"
+method[vars%in%binVarsF] = "logreg"
+#for (j in 1:length(vars)) if(vars[j]%in%binVarsF) temp[,j] = temp[,j] > .5 #MICE wants logical 
+for (j in 1:length(vars)) if(vars[j]%in%binVarsF) temp[,j] = factor(1*temp[,j],c(0,1)) #MICE wants factors? 
+names(method)=vars
+
+
+#KEEP known pregnant
+logi = X[,"preg_now"] == 1
+logi[is.na(logi)] = F
+
+predictorMatrixP =  predictorMatrixF
+predictorMatrixP[,"menopause"] = 0 #shouldn't be relevant
+
+mf2 = mice(temp[logi,vars],method=method,predictorMatrix=predictorMatrixP,m=15,maxit=5)
+
+save=T
+if(save)
+{
+  saveRDS(mf2,sprintf("%s/data/nhanes_menopause_preprocessed_imputed_pmm_logreg_females_pregnant.rds",outputDir))
+}
+```
+
+#check imputation quality
+check imputation quality - very slow - males
+check log scaling & pooling (if pooled)
+```{r}
+check=T #F will skip this, it's slow
+numImps=1 #number of imputations you want to look at
+#numImps=m$m #too slow
+gm = list()
+ind = 1
+for (i in 1:length(varsM))
+{
+  if(!check) break
+  if(!(varsM[i]%in%rownames(m$predictorMatrix))) next #can't find, skip
+  cat(".")
+  temp = list()
+  for (k in 1:numImps)
+  {
+    temp[[k]] = data.frame(mice::complete(m,k)[,c("RIDAGEYR",varsM[i])],imputed=m$where[,varsM[i]])
+    colnames(temp[[k]])[1:2]=c("age","y")
+  }
+  temp = do.call(rbind,temp)
+  temp[,"imputed"] = factor(temp[,"imputed"],c(F,T),c("obs","imputed"))
+
+  #histogram
+  #  gm[[i]] = ggplot(temp,aes(x=y,colour=imputed,fill=imputed))+
+  #    geom_histogram(aes(y = after_stat(density)),position="identity",alpha=.4)+
+  #    geom_density(fill=NA)+
+  #    labs(x=varsM[i],title=sprintf("Imputed %d (%.1f%%)",sum(temp[,"imputed"]=="imputed",na.rm=T),100*mean(temp[,"imputed"]=="imputed",na.rm=T)))+
+  #    theme_minimal(base_size=8)
+  
+  #age-dependence:
+    gm[[ind]] = ggplot(subset(temp,age>=20),aes(x=cut(age,seq(20,85,by=10),include.lowest=T),y=y,colour=imputed))+ #fill=imputed,shape=imputed
+      #geom_point(size=.1)+
+      #geom_smooth()+
+      geom_boxplot()+
+      labs(x="",y=varsM[i],title=sprintf("Imputed %d (%.1f%%)",sum(temp[,"imputed"]=="imputed",na.rm=T),100*mean(temp[,"imputed"]=="imputed",na.rm=T)))+
+      theme_minimal(base_size=8)
+  ind=ind+1
+}
+  
+library(cowplot)
+glegm = cowplot::ggdraw(cowplot::get_legend(gm[[1]]))
+
+for (i in 1:length(gm)) gm[[i]] = gm[[i]] + theme(legend.position="none")
+
+save=T
+if(save & check)
+{
+  nrow=10
+  ncol=10
+  inds = 1:(nrow*ncol-1)
+  counter=1
+  while(length(inds)>0)
+  {
+    g = gm[inds]
+    g[[length(g)+1]] = glegm
+    ggsave(sprintf("%s/results/%s%02d.pdf",outputDir,"nhanes_menopause_preprocessing_imputation_ppm_male",counter),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL),width=16,height=16)
+    inds = inds+(nrow*ncol-1)
+    inds = inds[inds<=length(gm)]
+    counter = counter+1
+  }
+}
+```
+
+check imputation quality - very slow - females
+check log scaling & pooling (if pooled)
+```{r}
+check=T #F will skip this, it's slow
+numImps=1 #number of imputations you want to look at
+#numImps=mf$m #too slow
+gm = list()
+ind = 1
+for (i in 1:length(varsF))
+{
+  if(!check) break
+    if(!(varsF[i]%in%rownames(mf$predictorMatrix))) next #can't find, skip
+  cat(".")
+  temp = list()
+  for (k in 1:numImps)
+  {
+    temp[[k]] = data.frame(mice::complete(mf,k)[,c("RIDAGEYR",varsF[i])],imputed=mf$where[,varsF[i]])
+    colnames(temp[[k]])[1:2]=c("age","y")
+  }
+  temp = do.call(rbind,temp)
+  temp[,"imputed"] = factor(temp[,"imputed"],c(F,T),c("obs","imputed"))
+
+  #histogram
+  #  gm[[i]] = ggplot(temp,aes(x=y,colour=imputed,fill=imputed))+
+  #    geom_histogram(aes(y = after_stat(density)),position="identity",alpha=.4)+
+  #    geom_density(fill=NA)+
+  #    labs(x=varsM[i],title=sprintf("Imputed %d (%.1f%%)",sum(temp[,"imputed"]=="imputed",na.rm=T),100*mean(temp[,"imputed"]=="imputed",na.rm=T)))+
+  #    theme_minimal(base_size=8)
+  
+  #age-dependence:
+    gm[[ind]] = ggplot(subset(temp,age>=20),aes(x=cut(age,seq(20,85,by=10),include.lowest=T),y=y,colour=imputed))+ #fill=imputed,shape=imputed
+      #geom_point(size=.1)+
+      #geom_smooth()+
+      geom_boxplot()+
+      labs(x="",y=varsF[i],title=sprintf("Imputed %d (%.1f%%)",sum(temp[,"imputed"]=="imputed",na.rm=T),100*mean(temp[,"imputed"]=="imputed",na.rm=T)))+
+      theme_minimal(base_size=8)
+  ind=ind+1
+}
+  
+library(cowplot)
+glegm = cowplot::ggdraw(cowplot::get_legend(gm[[1]]))
+
+for (i in 1:length(gm)) gm[[i]] = gm[[i]] + theme(legend.position="none")
+
+save=T
+if(save & check)
+{
+  nrow=10
+  ncol=10
+  inds = 1:(nrow*ncol-1)
+  counter=1
+  while(length(inds)>0)
+  {
+    g = gm[inds]
+    g[[length(g)+1]] = glegm
+    ggsave(sprintf("%s/results/%s%02d.pdf",outputDir,"nhanes_menopause_preprocessing_imputation_ppm_female",counter),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL),width=16,height=16)
+    inds = inds+(nrow*ncol-1)
+    inds = inds[inds<=length(gm)]
+    counter = counter+1
+  }
+}
+```
+
+
+
+
+```{r}
+```

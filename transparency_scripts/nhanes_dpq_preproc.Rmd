@@ -1,0 +1,397 @@
+---
+title: "NHANES DPQ - depression screener"
+output: html_notebook
+---
+
+Glen Pridham May 2025
+For preprocessing depression health variables.
+
+```{r}
+gRootName = "nhanes"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+outputDir = "C:/postdoc/nhanes" #analysis directory
+dataDir =  "C:/data/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+source("C:/postdoc/latent_variable_models.R")
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+library(RNHANES)
+```
+
+
+
+# load in data
+```{r}
+ageCol = "RIDAGEYR"
+sexCol = "RIAGENDR"
+```
+
+#demographics
+```{r}
+demo = read.csv(sprintf("%s/nhanes_demo/nhanes_demo.csv",dataDir))
+rownames(demo)=demo[,"SEQN"]
+```
+
+#exam data
+```{r}
+#exam = read.csv(sprintf("%s/nhanes_exam/nhanes_exam.csv",dataDir))
+#rownames(exam)=exam[,"SEQN"]
+```
+
+codex for searching variable types
+```{r}
+codex = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic_vars.csv",dataDir))
+rownames(codex)=codex[,"Variable.Name"]
+```
+
+```{r}
+clinic = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic.csv",dataDir))
+rownames(clinic) = clinic[,"SEQN"]
+clinic[,"age"] = NA
+clinic[,"age"] = demo[rownames(clinic),ageCol]
+clinic[,"survey"] = demo[rownames(clinic),"SDDSRVYR"]
+clinic[,"sex"] = demo[rownames(clinic),sexCol]
+```
+
+```{r}
+dpVars = colnames(clinic)[grepl("DPQ",colnames(clinic))]
+dpq = clinic[,c("age","sex","survey",dpVars)]
+
+dpqCodex = codex[dpVars,]
+
+write.csv(dpqCodex,sprintf("%s/data/dpq_codex.csv",outputDir))
+
+```
+
+now preproc
+```{r}
+library(dplyr)
+age = dpq[,"age"]
+```
+
+```{r}
+AndStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi & l[[i]]
+  }
+  return(logi)
+}
+
+OrStack = function(l,defaultLogi=FALSE)
+{
+  logi = l[[1]]
+  logi[is.na(logi)] = defaultLogi
+  if(length(l)<2) return(logi)
+  for (i in 2:length(l)) 
+  {
+    l[[i]][is.na(l[[i]])] = defaultLogi
+    logi = logi | l[[i]]
+  }
+  return(logi)
+}
+```
+
+
+```{r}
+
+#DPQ010 - Have little interest in doing things (past 2 weeks)
+#0	Not at all
+#1	Several days
+#2	More than half the days
+#3	Nearly every day
+#7	Refused
+#9	Don't know
+col = "DPQ010" 
+nm = "little_interest_doing"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+
+#DPQ020 - Feeling down, depressed, or hopeless
+col = "DPQ020"
+nm = "feeling_down"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ030 - Trouble sleeping or sleeping too much
+col = "DPQ030"
+nm = "depression_sleep"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ040 - Feeling tired or having little energy
+col = "DPQ040"
+nm = "low_energy"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ050 - Poor appetite or overeating
+col = "DPQ050"
+nm = "depression_appetite"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ060 - Feeling bad about yourself
+col = "DPQ060"
+nm = "low_self_esteem"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ070 - Trouble concentrating on things
+col = "DPQ070"
+nm = "difficulty_concentrating"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ080 - Moving or speaking slowly or too fast
+col = "DPQ080"
+nm = "depression_speech"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ090 - Thought you would be better off dead
+col = "DPQ090"
+nm = "better_off_dead"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+
+#DPQ100 - Difficulty these problems have caused
+#0	Not at all difficult	
+#1	Somewhat difficult
+#2	Very difficult
+#3	Extremely difficult
+col = "DPQ100"
+nm = "depression_difficulties"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+depVars = c("little_interest_doing",
+"feeling_down",
+"depression_sleep",
+"low_energy",
+"depression_appetite",
+"low_self_esteem",
+"difficulty_concentrating",
+"depression_speech",
+"better_off_dead")
+dpq["depression_score"] = apply(dpq[,depVars],1,mean,na.rm=T)
+```
+
+new variables - graded binary
+```{r}
+keepVars = c("little_interest_doing",
+"feeling_down",
+"depression_sleep",
+"low_energy",
+"depression_appetite",
+"low_self_esteem",
+"difficulty_concentrating",
+"depression_speech",
+"better_off_dead",
+"depression_difficulties")
+for (j in 1:length(keepVars))
+{
+  dpq[,sprintf("%s_GRADE%02d",keepVars[j],1:3)]  = OneHotVecOrdinal(ordered(round(dpq[[keepVars[j]]]*3),0:3))
+}
+
+```
+
+#save
+```{r}
+write.csv(dpq,sprintf("%s/data/nhanes_dpq.csv",outputDir))
+```
+
+#spare code
+```{r}
+stop("old code")
+```
+
+```{r}
+#DPQ010 - Have little interest in doing things (past 2 weeks)
+#0	Not at all
+#1	Several days
+#2	More than half the days
+#3	Nearly every day
+#7	Refused
+#9	Don't know
+col = "DPQ010" 
+nm = "little_interest_doing"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ020 - Feeling down, depressed, or hopeless
+col = "DPQ020"
+nm = "feeling_down"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ030 - Trouble sleeping or sleeping too much
+col = "DPQ030"
+nm = "depression_sleep"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ040 - Feeling tired or having little energy
+col = "DPQ040"
+nm = "low_energy"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ050 - Poor appetite or overeating
+col = "DPQ050"
+nm = "depression_appetite"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ060 - Feeling bad about yourself
+col = "DPQ060"
+nm = "low_self_esteem"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ070 - Trouble concentrating on things
+col = "DPQ070"
+nm = "difficulty_concentrating"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ080 - Moving or speaking slowly or too fast
+col = "DPQ080"
+nm = "depression_speech"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+#DPQ090 - Thought you would be better off dead
+col = "DPQ090"
+nm = "better_off_dead"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+
+#DPQ100 - Difficulty these problems have caused
+#0	Not at all difficult	
+#1	Somewhat difficult
+#2	Very difficult
+#3	Extremely difficult
+col = "DPQ100"
+nm = "depression_difficulties"
+x = dpq[,col]
+dpq[nm] = dplyr::case_when(
+    x == 0             ~ 0,
+    x == 1             ~ 1/3,
+    x == 2             ~ 2/3,
+    x == 3             ~ 1,
+    TRUE              ~ NA_real_)
+
+```

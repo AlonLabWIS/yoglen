@@ -1,0 +1,406 @@
+---
+title: "SWAN preprocessing"
+output: html_notebook
+---
+
+Glen June 2025
+
+Work in progress
+
+Basic code to get swan data up and running. preprocesses some but not all variables.
+
+to do:
+-incorporate update variables (e.g. do you have new condition since last wave)
+
+notes:
+-automatically loads raw data from C:/data/swan/stata
+
+```{r}
+gRootName = "menopause"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0)
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0)
+#source(sprintf("%s/latent_variable_models.R","C:/postdoc"),verbose=0) #had MakeQuadPlots
+#source(sprintf("%s/latent_mixed.R","C:/postdoc"),verbose=0) #had MakeQuadPlots
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+#library(RNHANES)
+library(cowplot)
+#library(survPen)
+library(pROC)
+library(ranger)
+outputDir = "C:/postdoc/menopause" #analysis directory
+nhanesDir =  "C:/postdoc/nhanes"
+dataDir =  "C:/data/nhanes"
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+```
+
+load data and align
+```{r}
+library(dplyr)
+prescreen = read_dta(sprintf("C:/data/swan/stata/prescreen.dta") )
+#menopause status:
+status = dplyr::case_when(
+    prescreen[["STATUS"]] == 2      ~ "post_menopause",
+    prescreen[["STATUS"]] == 3     ~ "late_perimenopause",
+    prescreen[["STATUS"]] == 4     ~ "early_perimenopause",
+    prescreen[["STATUS"]] == 5     ~ "pre_menopause",
+    TRUE              ~ NA_character_) #unknown
+round(prop.table(table(status)),2)
+```
+#                             BLEEDNG4                              BLD3MON4 
+"Menstrual bleeding since last visit" "Menstrual bleeding in last 3 months" 
+
+```{r}
+warning("I think you have different column naming after baseline? like update columns instead")
+remove_suffix <- function(x, suffix) {
+  sub(paste0(suffix, "$"), "", x, perl = TRUE)
+}
+
+wavenum = 0:10
+waves = sprintf("wave%02d",wavenum)
+
+#keep 0th wave as reference to lookup stuff
+df0 =  read_dta(sprintf("C:/data/swan/stata/%s.dta","wave00") )
+colnames(df0) = remove_suffix(tolower(colnames(df0)),"0")
+df0[["test"]] = df0[["t"]]
+keepCols = colnames(df0)
+keepCols = c(keepCols,"bleedng","bld3mon")
+keepRows = as.character(df0[["swanid"]])
+
+df = list()
+#keepCols = NULL
+#binaryVars = c("strtper","hipbrk")
+NALabelVars = c('insuevm','thyrevm','cortevm','coagevm','barbevm','diurevm','convevm','lithevm','amphevm','premevm','ptchevm','combevm','provevm','tamoevm','desevmo','depoevm','fertevm','bcevmo','startag','numpreg','bfmo1','kggn1','bfmo2','kggn2','bfmo3','kggn3','bfmo4','kggn4','bfmo5','kggn5','bfmo6','kggn6','bfmo7','kggn7','bfmo8','kggn8','bfmo9','kggn9','bfmo10','kggn10','agfirpr','aglaspr','agfirki','aglaski','hswrkhr','daughte','son','sister','brother','othfema','othrmal','hospsta','mdtalk','hswtkg','strtsmo','avcigda','stopsmo','cigsnow','smokeyr','hhmemsm','homexpd','homexph','wrkexpd','wrkexph','wrkexpe','totexph','leakbot','wetpads','hipage','backage','uparmag','loarmag','lolegag','footage','othboag','bckpnag','bksrgag','dandcnu')
+binaryVars=c('pregnan','prevblo','alchl24','eatdrin','strtper','blddraw','anticoa','acoays','heart','hartys','ulcer','ulcrys','cholest','cholys','bp','bpys','thyroid','thyrys','insulin','insuys','nervous','nervys','steroid','sterys','inhaler','inhays','hormcre','hcrmys','hormpil','hormys','estrptc','estrys','bcp','bcpys','othmed','othrys','pain','painys','sleep','slepys','bowel','bowlys','heartbr','hbrnys','othotc','otcys','insueve','thyreve','corteve','coageve','barbeve','diureve','conveve','litheve','ampheve','premeve','ptcheve','combeve','proveve','tamoeve','desever','depoeve','ferteve','bcever','stroke','strokmd','hbchole','hbchomd','migrain','migramd','gallsto','gallsmd','osteoar','osteomd','oathyro','oathymd','uathyro','uathymd','hbcalci','hbcalmd','anemia','anemimd','liver','livermd','epileps','epilemd','phlebit','phlebmd','anorexi','anoremd','bulimia','bulimmd','tubercu','tubermd','aids','aidsmed','lupus','lupusmd','commite','tendafl','spotbet','floodin','clots','startda','cramps','breastp','bloated','moodchn','craving','anxious','backpai','lesssex','moresex','interfe','headach','charact','bc25to3','floage2','spot253','flod253','clot253','strt253','breastf','bfeve','trypreg','job','dayshft','eveshft','nghtshf','rotshft','househl','malepar','fempart','mother','father','motinla','fatinla','prepaid','othrpri','medicar','medicai','militar','noinsur','othinsu','smokere','smokeno','phyctdw','phyacco','phylimi','phydfcl','emoctdw','emoacco','emocare','othspor','flashph','flasheb','flashem','involea','coughin','laughin','sneezin','jogging','pickup','urgevoi','othrlea','rmdylea','disclea','medilea','kegelex','wearpro','urinoft','restrac','surglea','othrmea','brokbon','hipbrk','backbrk','uparmbr','loarmbr','lolegbr','footbrk','othbobr','backpn','backsur','backtre','tubetie','dandc','infallo','uterpro','thyrdrm','nutrire','nutrsym','herbrem','herbsym','psycmet','psycsym','physmet','physsym','folkmed','folksym','engagse','nopartn','partpro','physpro','notired','partire','nointrs','partnoi','nosexot','love','tension','partwan','getpreg','pleasur','sexoth','tubalig','vasectm','prgnanc','rhythm','foam','diaphrg','pill','iud','withdra','condom','abstain','add1xwk')
+binaryVars=c(binaryVars,"bleedng","bld3mon")
+twoWeekVars = list()
+twoWeekVars[[1]] = c('stiff','coldswe','niteswe','vagindr','feelblu','leakuri','dizzy','irritab','nrvous','forget','moodchg','hartrac','fearfula','hdache','hotflas')
+twoWeekVars[[2]] = c('trblsle','wakeup','wakearl')
+for (k in 1:length(wavenum))
+{
+  df[[k]] = read_dta(sprintf("C:/data/swan/stata/%s.dta",waves[k]) )
+  df[[k]] = as.data.frame(df[[k]])
+  colnames(df[[k]]) = tolower(colnames(df[[k]]))
+  df[[k]][["wave"]] = wavenum[k]
+  #rownames(df[[k]])=df[[k]][["swanid"]]
+  #strip wave identifier from variable name i.e. last entry
+  nms = colnames(df[[k]])
+  nms = remove_suffix(nms,sprintf("%d",wavenum[k]))
+  #for (j in 1:length(nms)) nms[[k]] = 
+  colnames(df[[k]]) = nms
+  
+  df[[k]][,"test"] = df[[k]][,"t"]
+  
+  #reshape to same columns
+  #if(k==1) keepCols = colnames(df[[1]])
+  df[[k]][,setdiff(keepCols,colnames(df[[k]]))] = NA #add missing columns
+  df[[k]] = df[[k]][,keepCols] #only keep first wave's columns
+
+  #reshape to same rows
+  rownames(df[[k]])=df[[k]][,"swanid"]
+  df[[k]][setdiff(keepRows,rownames(df[[k]])),] =NA
+  df[[k]] = df[[k]][keepRows,]
+  #df[[k]][is.na(df[[k]]),"swanid"] = as.numeric(rownames(df[[k]][is.na(df[[k]]),]))
+  df[[k]][,"swanid"] = as.numeric(keepRows)
+  
+    
+  df[[k]][,"visit"] = wavenum[k]
+  df[[k]][,"wave"] = wavenum[k]
+  
+  #fix type
+  for (j in 1:ncol(df[[k]])) df[[k]][,j] = as.numeric(as.character(df[[k]][,j]))
+    
+  #add baseline
+  df[[k]][,sprintf("%s_baseline",keepCols)] = df[[1]][,keepCols]
+  
+  #preprocessing - TO DO
+    #lots of codings here
+  
+  #I think these are continuous variables:
+  #    Missing Do not know     Refused         N/A 
+  #       -9          -8          -7          -1 
+  for (jj in 1:length(NALabelVars))
+  {
+    df[[k]][[NALabelVars[jj]]] = dplyr::case_when(
+              df[[k]][[NALabelVars[jj]]] < 0      ~ NA_real_,
+              TRUE              ~ df[[k]][[NALabelVars[jj]]]) 
+  }
+  
+  
+  df[[k]][,"status"] = dplyr::case_when(
+    df[[k]][["status"]] == 1      ~ "post_by_bso", # BSO: bilateral salpingo-oophorectomy
+    df[[k]][["status"]] == 2      ~ "post_menopause",
+    df[[k]][["status"]] == 3     ~ "late_perimenopause",
+    df[[k]][["status"]] == 4     ~ "early_perimenopause",
+    df[[k]][["status"]] == 5     ~ "pre_menopause",
+    df[[k]][["status"]] == 6     ~ "pregnant",
+    #df[[k]][["status"]] == 7     ~ "unknown_due_to_ht",
+    #df[[k]][["status"]] == 8     ~ "unknown_due_to_hysterectomy",
+    TRUE              ~ NA_character_) #unknown
+  
+  #df[[k]][,"hipbrk"] = dplyr::case_when( #broken hip
+  #  df[[k]][["hipbrk"]] == 1      ~ 0.0, 
+  #  df[[k]][["hipbrk"]] == 2      ~ 1.0,
+  #  TRUE              ~ NA_real_) 
+  for (jj in 1:length(binaryVars))
+  {
+    df[[k]][[binaryVars[jj]]] = dplyr::case_when(
+              df[[k]][[binaryVars[jj]]] == 1      ~ 0.0, 
+              df[[k]][[binaryVars[jj]]] == 2      ~ 1.0,
+              TRUE              ~ NA_real_) 
+  }
+  
+  for (jj in 1:length(twoWeekVars[[1]]))
+  {
+    #    Missing Do not know     Refused         N/A  Not At All    1-5 Days    6-8 Days   9-13 Days   Every Day 
+    #     -9          -8          -7          -1           1           2           3           4           5
+    df[[k]][[twoWeekVars[[1]][jj]]] = dplyr::case_when(
+              df[[k]][[twoWeekVars[[1]][jj]]] < 0 ~ NA_real_,
+              TRUE              ~ df[[k]][[twoWeekVars[[1]][jj]]]/5.0) 
+  }
+  for (jj in 1:length(twoWeekVars[[2]]))
+  {
+    #Missing               Do not know                   Refused                       N/A 
+    #   -9                        -8                        -7                        -1 
+    #No, Not In The Past 2 Wks          Yes, < Once A Wk         Yes, 1-2 Times/Wk         Yes, 3-4 Times/Wk 
+    #                    1                         2                         3                         4 
+    #Yes, 5 or More Times/Wk 
+    #                    5 
+    df[[k]][[twoWeekVars[[2]][jj]]] = dplyr::case_when(
+              df[[k]][[twoWeekVars[[2]][jj]]] < 0 ~ NA_real_,
+              TRUE              ~ df[[k]][[twoWeekVars[[2]][jj]]]/5.0) 
+  }
+  
+  #special cases:
+  #              Missing           Do not know               Refused                   N/A Very sound or restful 
+  #                 -9                    -8                    -7                    -1                     1 
+  #   Sound or restful       Average quality              Restless         Very restless 
+  #                  2                     3                     4                     5 
+  df[[k]][["typnigh"]] = dplyr::case_when( 
+              df[[k]][["typnigh"]] < 0 ~ NA_real_,
+              TRUE              ~ df[[k]][["typnigh"]]/5.0) 
+  
+  #noperio
+  #Missing          Do not know              Refused                  N/A                   No 
+  #                -9                   -8                   -7                   -1                    1 
+  #Yes - One time only Yes - More than once 
+  #                 2                    3 
+      df[[k]][["noperio"]] = dplyr::case_when( #Since age 18, ever went 3 months without a period
+              df[[k]][["noperio"]] == 1      ~ 0.0,  #never
+              df[[k]][["noperio"]] == 2      ~ 0.5, #once
+              df[[k]][["noperio"]] == 3      ~ 1.0, #more than once
+              TRUE              ~ NA_real_) 
+
+      df[[k]][["interva"]] = dplyr::case_when( #Past 12 months, period interval has
+              df[[k]][["interva"]] == 1      ~ "further",  #further apart
+              df[[k]][["interva"]] == 2      ~ "closer", #closter together
+              df[[k]][["interva"]] == 3      ~ "variable", #more variable
+              df[[k]][["interva"]] == 4      ~ "same",
+              df[[k]][["interva"]] == 5      ~ "more_regular",
+              TRUE              ~ NA_character_) 
+}
+```
+impute last menstrual period
+bleedng==0 means no menstrual bleeding since last visit 
+```{r}
+for (i in 2:length(df))
+{
+  #no bleeding since last visit AND lmpday currently unknown
+  logi = df[[i]][,"bleedng"] == 0 & is.na(df[[i]][,"lmpday"])
+  logi[is.na(logi)] = FALSE
+  
+  #carry forward lmpday if no bleeding since last interview
+  df[[i]][logi,"lmpday"] = df[[i-1]][logi,"lmpday"]
+
+}
+
+
+```
+
+
+impute age of menopause backwards
+LMPDAY #Last menstrual period (days since baseline) #time since they mensturated last (centered on baseline)
+  -LMPDAY is the number of days at baseline since the date of the last menstrual period. It is pulled from
+    another source that evaluated the menopause status related variables over time, and corrected
+    inconsistencies via additional corroborating information.
+    -clearly it's not this since it's changing. this must be days since you last menstruated centered by baseline date
+INTDAY #Interview day
+  -given in days from interview date at baseline.
+-age is rounded
+not sure there is any point doing this, it may have already been done!
+chatgpt says:
+  LMPDAY = (date of last bleed) – (baseline interview date) 
+  = time since last bleed (in days) #my line
+LMPDAY =(Calendar date of last menstrual bleed reported at visit v)−(Baseline interview date)(in days)
+```{r}
+warning("not sure this is right...")
+warning("not sure there is any point doing this, it may have already been done!")
+df0[,"time_since_last_period"] = (df0[,"intday"] - df0[,"lmpday"])/365.25
+for (k in 1:length(df)) 
+{
+  df[[k]][,"age_menopause"] = NA
+  df[[k]][,"time_since_last_period"] = (df[[k]][,"intday"] - df[[k]][,"lmpday"])/365.25
+  logi = df[[k]][,"time_since_last_period"] >= 1 #menopause
+  logi[is.na(logi)] = F
+  df[[k]][logi,"age_menopause"] = df[[k]][logi,"age"] - df[[k]][logi,"time_since_last_period"]
+}
+#impute backwards
+for(i in (length(df)-1):1)
+{
+  logi = is.na(df[[i]][,"age_menopause"]) & !is.na(df[[i+1]][,"age_menopause"])
+  df[[i]][logi,"age_menopause"] = df[[i+1]][logi,"age_menopause"]
+}
+#impute forwards
+for(i in 2:length(df))
+{
+  logi = is.na(df[[i]][,"age_menopause"]) & !is.na(df[[i-1]][,"age_menopause"])
+  df[[i]][logi,"age_menopause"] = df[[i-1]][logi,"age_menopause"]
+}
+
+#t
+for (k in 1:length(df)) df[[k]][,"t"] = df[[k]][,"age"]-df[[k]][,"age_menopause"]
+
+dfall =do.call(rbind,df)
+
+dfall = dfall[order(dfall$swanid,dfall$age),]
+```
+
+```{r}
+codex = character()
+for (j in 1:ncol(df0)) codex[j]=attr(df0[[j]],"label")
+names(codex)=colnames(df0)
+
+#codex[grep("estradiol",tolower(codex))]
+#which(names(codex)=="e2ave")
+
+#past 2 weeks symptoms
+symptoms = c('stiff','coldswe','niteswe','vagindr','feelblu','leakuri','dizzy','irritab','nrvous','forget','moodchg','hartrac','fearfula','hdache','hotflas','trblsle','wakeup','wakearl','typnigh')
+#other symptoms
+symptoms = c(symptoms,"breastp")
+names(symptoms) = codex[symptoms]
+```
+
+```{r}
+dfall[,"symptoms"] = apply(dfall[,symptoms],1,mean,na.rm=T)
+```
+
+get censorship info
+```{r}
+dfall[,"menopause_status"] = 1*(dfall[,"age"] > dfall[,"age_menopause"]) # known ones
+dfall[,"menopause_status"] = dplyr::case_when(
+    !is.na(dfall[,"menopause_status"])  ~dfall[,"menopause_status"], #preceeds
+    is.na(dfall[,"status"])   ~NA_real_,
+    dfall[,"status"] %in% c("late_perimenopause","early_perimenopause","pre_menopause","pregnant")     ~ 0, 
+    dfall[,"status"] %in% c("post_menopause","post_by_bso")   ~1, # BSO: bilateral salpingo-oophorectomy
+    dfall[,"time_since_last_period"] < 1     ~NA_real_, #assume not menopausal yet
+    TRUE              ~ NA_real_) 
+
+dfall <- dfall %>%
+  group_by(swanid) %>%
+  arrange(age) %>%  # Optional: only if 'time' exists
+  mutate(
+    first_age = first(age),
+    last_age  = last(age),
+  ) %>%
+  mutate(first_menopause_status = if (all(is.na(age))) NA else menopause_status[which.min(age)]) %>%
+  mutate(last_menopause_status = if (all(is.na(age))) NA else menopause_status[which.max(age)]) %>%
+  mutate(last_non_menopause_age = if (all(is.na(age))) NA else max(age[!is.na(menopause_status) & menopause_status==0], na.rm = TRUE)) %>%
+  ungroup()
+
+
+
+dfall = data.frame(dfall)
+
+#does this even make sense???
+dfall[,"age_menopause_or_last"]= dplyr::case_when(
+  !is.na(dfall[,"age_menopause"]) ~dfall[,"age_menopause"],
+  !is.na(dfall[,"last_non_menopause_age"])  ~dfall[,"last_non_menopause_age"],
+  TRUE  ~ NA_real_)
+
+dfall[,"status_menopause_or_last"]= dplyr::case_when(
+  !is.na(dfall[,"age_menopause"]) ~1,
+  !is.na(dfall[,"last_non_menopause_age"])  ~0,
+  TRUE  ~ NA_real_)
+
+dfall[,"time_to_menopause"]    = dfall[,"last_non_menopause_age"]-dfall[,"age"]
+#dfall[,"time_since_menopause"] = -dfall[,"time_to_menopause"] #NO! this includes censored values not good!
+dfall[,"time_since_menopause"] = dfall[,"age"]-dfall[,"age_menopause"]
+
+
+```
+
+```{r}
+save=T
+if(save)
+{
+  write.csv(dfall,sprintf("%s/data/swan_preprocessed.csv",outputDir))
+}
+```
+
+
+are these plausible?
+fsh units: mIU/mL
+e2 unites: Estradiol, picograms per milliliter (average, pg/mL)
+```{r}
+ggplot(dfall,aes(x=age,y=fsh,colour=factor(menopause_status)))+
+  geom_jitter(alpha=.1)+
+  #geom_line(aes(group=swanid),alpha=.1)+
+  scale_y_log10()+
+  annotation_logticks(sides="l")+
+  theme_minimal()
+
+ggplot(dfall,aes(x=age,y=e2ave,colour=factor(menopause_status)))+
+  geom_jitter(alpha=.1)+
+  #geom_line(aes(group=swanid),alpha=.1)+
+  scale_y_log10()+
+  annotation_logticks(sides="l")+
+  theme_minimal()
+```
+
+```{r}
+ggplot(dfall,aes(x=time_since_menopause,y=fsh))+
+  geom_point(alpha=.1)+
+  geom_line(aes(group=swanid),alpha=.1)+
+  geom_smooth(colour='red',fill='red')+
+  scale_y_log10()+
+  annotation_logticks(sides="l")+
+  theme_minimal()
+```
+spot checks
+```{r}
+unique(subset(dfall,fsh > 70 & time_since_menopause < -5)[,"swanid"])
+
+print(subset(dfall,swanid==26392)[,c("swanid","age","time_since_menopause","time_since_last_period","status","menopause_status","symptoms","fsh","e2ave","intday","lmpday","bleedng","bld3mon")])
+
+print(subset(dfall,swanid==43213)[,c("swanid","age","time_since_menopause","time_since_last_period","status","menopause_status","symptoms","fsh","e2ave","intday","lmpday","bleedng","bld3mon")])
+
+print(subset(dfall,swanid==97016)[,c("swanid","age","time_since_menopause","time_since_last_period","status","menopause_status","symptoms","fsh","e2ave","intday","lmpday","bleedng","bld3mon")])
+```
+
+#spare code
+```{r}
+stop("beginning of spare code")
+```
+
+for find specific storage types:
+```{r}
+a = attr(df0[["noperio"]],"labels")
+vars = character()
+for (j in 1:ncol(df0))
+{
+  if(isTRUE(all.equal(a,attr(df0[[j]],"labels"))))
+  {
+    vars = c(vars,colnames(df0)[j])
+  }
+}
+vars = unique(vars)
+paste(vars,collapse="','")
+```

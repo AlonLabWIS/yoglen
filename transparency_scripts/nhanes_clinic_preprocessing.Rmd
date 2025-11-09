@@ -1,0 +1,542 @@
+---
+title: "NHANES Clinic (Questionnaire) Preprocessing"
+output: html_notebook
+---
+
+Glen Jan 2025
+
+For preprocessing the binary (and ordinal) data
+
+
+```{r}
+gRootName = "nhanes"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+outputDir = "C:/postdoc/nhanes" #analysis directory
+dataDir =  "C:/data/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+source("C:/postdoc/latent_variable_models.R")
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+library(RNHANES)
+```
+
+
+
+# load in data
+```{r}
+ageCol = "RIDAGEYR"
+sexCol = "RIAGENDR"
+```
+
+#demographics
+```{r}
+demo = read.csv(sprintf("%s/nhanes_demo/nhanes_demo.csv",dataDir))
+rownames(demo)=demo[,"SEQN"]
+```
+
+#exam data
+```{r}
+exam = read.csv(sprintf("%s/nhanes_exam/nhanes_exam.csv",dataDir))
+rownames(exam)=exam[,"SEQN"]
+```
+
+codex for searching variable types
+```{r}
+codex = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic_vars.csv",dataDir))
+rownames(codex)=codex[,"Variable.Name"]
+```
+
+```{r}
+PoolBinary = function(x,#data frame
+                      threshold=1e-10 #eps = threshold of 'or', .75 = thresold of 'and'
+                      )
+{
+  #combines binary vectors
+  return(as.numeric(apply(x,1,mean,na.rm=T) > threshold))
+}
+
+PoolBinaryList = function(l)
+{
+  #combines list of binary vectors
+  b = l[[1]]
+  if(length(l)>1)
+  {
+    for (i in 2:length(l))
+    {
+      logi = l[[i]]==0
+      logi[is.na(logi)] = F
+      b[logi] = 0
+      
+      logi = l[[i]]==1
+      logi[is.na(logi)] = F
+      b[logi] = 1
+    }
+
+  }
+
+  return(b)
+}
+```
+
+#load binary (questionnaire) data
+to do: add cognitive variables (CFQ)
+```{r,warning=F}
+file = sprintf("%s/nhanes_clinic/nhanes_clinic_preproc.csv",dataDir)
+codefile = sprintf("%s/nhanes_clinic/nhanes_clinic_preproc_code.csv",dataDir)
+auxFile = sprintf("%s/nhanes_clinic/nhanes_clinic_aux_preproc.csv",dataDir) 
+auxCodeFile = sprintf("%s/nhanes_clinic/nhanes_clinic_aux_preproc_code.csv",dataDir) 
+save=T
+load=F
+if(file.exists(file) & load)
+{
+  b = read.csv(file,row.names=1)
+  bcode = read.csv(codefile,row.names=1)
+} else
+{
+  clinic = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic.csv",dataDir))
+  rownames(clinic) = clinic[,"SEQN"]
+  clinic[,"age"] = NA
+  clinic[,"age"] = demo[rownames(clinic),ageCol]
+  clinic[,"survey"] = demo[rownames(clinic),"SDDSRVYR"]
+  clinic[,"sex"] = demo[rownames(clinic),sexCol]
+  binvar = read.csv(sprintf("%s/binary_fivar.csv",outputDir),row.names=1)
+  #ordvar = read.csv(sprintf("%s/ordinal_fivar.csv",outputDir),row.names=1) #gated by  gatelogi = clinic[,"RIDAGEYR"] < 59.001 & clinic[,"PFQ049"] == 2 & clinic[,"PFQ057"] == 2 & clinic[,"PFQ059"] == 2
+  ordvar = read.csv(sprintf("%s/ordinal_fivar_v2.csv",outputDir),row.names=1) #v2 makes 'do not do' == 1
+
+  b = clinic[,toupper(binvar[,"name"])]
+  pts = intersect(rownames(clinic),rownames(exam))
+  for (j in 1:ncol(b))
+  {
+    recode = rep(NA,nrow(b))
+    logi = b[,j] == 1
+    logi[is.na(logi)] = F
+    recode[logi] = 1
+    logi = b[,j] == 2
+    logi[is.na(logi)] = F
+    recode[logi] = 0
+    b[,j] = recode
+  
+    #fix direction
+    if(binvar[j,"direction"] < 0) b[,j] = 1-b[,j]
+    
+    #impute???
+    warning("to do: look up the binary variables and check gating")
+  
+  
+  }
+
+  #combine same variable (I assume different wave, but whatever they're averaged together)
+  #drop = character()
+  #combine weak kidneys
+  #comb = c("KIQ020","KIQ022")
+  #drop = c(drop,comb)
+  #b[,"weakKidneys"] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01)
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  #b[,"KIQ020"] = as.integer(apply(b[,c("KIQ020","KIQ022"])],1,mean,na.rm=T) > .25) #at least one > 0
+  #b[,"KIQ022"] = b[,"KIQ020"]
+  #combine shortness of breath
+  #comb = c("CDQ010","CDQ020","CDQ030","CDQ040")
+  #drop = c(drop,comb)
+  #b[,"shortOfBreath"] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01)
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  #combine 'leaked urine'
+  #comb = c("KIQ042","KIQ044","KIQ046")
+  #drop = c(drop,comb)
+  #b[,"leakedUrine"] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01)
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  #combine prostate disease
+  #comb = c("KIQ106","KIQ490")
+  #drop = c(drop,comb)
+  #b[,"prostateDisease"] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01)
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  #combine coughing most days 3 mo period
+  #comb = c("RDD030","RDQ031")
+  #drop = c(drop,comb)
+  #b[,"coughing"] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01)
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  #combine regular periods
+  #comb = c("RHQ030","RHQ031")
+  #drop = c(drop,comb)
+  #b[,"regularPeriods"] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01)
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  #combine Taken prescription medicine, past month
+  #comb = c("RXDUSE","RXQ033")
+  #drop = c(drop,comb[-1])
+  #b[,comb[1]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01)
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  #combine cataracts
+  #comb = c("VIQ070","VIQ071")
+  #for (jj in 1:length(comb)) b[,comb[j]] = as.integer(apply(b[,comb],1,mean,na.rm=T) > .01) #at least one > 0
+  combs = list(
+                kidneys=c("KIQ020","KIQ022"),
+                breath=c("CDQ010","CDQ020","CDQ030","CDQ040"),
+                urine=c("KIQ042","KIQ044","KIQ046"),
+                prostate=c("KIQ106","KIQ490"),
+                coughing=c("RDD030","RDQ031"),
+                periods=c("RHQ030","RHQ031"),
+                rxd=c("RXDUSE","RXQ033"),
+                #regularPeriods=c("RHQ030","RHQ031"),
+                #everPreg=c("RHD130","RHQ131"),
+                #pregNow=c("RHD143","RHQ141"),
+                cataracts=c("VIQ070","VIQ071")
+                )
+  drop = character()
+  for (kk in 1:length(combs))
+  {
+    drop = c(drop,combs[[kk]][-1])
+    b[,combs[[kk]][1]] = as.integer(apply(b[,combs[[kk]]],1,mean,na.rm=T) > 1e-5) #any > 0 will trigger
+  }
+  b = b[,setdiff(colnames(b),drop)]
+
+  
+
+
+  #add exam data
+  #combine 20 foot walk
+  #they changed the name after 99
+  #age-dependent distribution looks basically the same to me
+  #Cawthon, P. M. et al. What cut-point in gait speed best discriminates community-dwelling older adults with mobility complaints from those without? A pooled analysis from the sarcopenia definitions and outcomes consortium. J. Gerontol. A Biol. Sci. Med. Sci. 76, e321–e327 (2021).
+    #women: 0.62-0.75 m/s, <0.62 m/s; men: 0.57-0.74 m/s, <0.57 m/s 
+      #Rounding to 0.60 m/s and 0.75 m/s reclassified very few participants.
+        #3.28084 feet/meter
+  #also see: Studenski, S. et al. Gait speed and survival in older adults. JAMA 305, 50–58 (2011). #0.8 as normal, 0.6 as dangerous #paper emphasises graded response
+  comb = c("MSXW20TM","MSXWTIME")
+  logi = is.na(exam[,"MSXW20TM"])
+  logi[is.na(logi)] = F
+  exam[logi,"MSXW20TM"] = exam[logi,"MSXWTIME"]
+  b[pts,"GAIT_GRADE01"] = 1*(exam[pts,"MSXW20TM"] > 20/.75/3.28084) #reasonable #looks like it is picking up naturally slow people
+  b[pts,"GAIT_GRADE02"] = 1*(exam[pts,"MSXW20TM"] > 20/.6/3.28084) #both papers agree
+  
+  binvar["GAIT_GRADE01","name"] = "GAIT_GRADE01"
+  binvar["GAIT_GRADE01","parsed"] = "slow gait (<0.75 m/s)"
+  binvar["GAIT_GRADE01","class"] = "Physical Functioning"
+  binvar["GAIT_GRADE02","name"] = "GAIT_GRADE02"
+  binvar["GAIT_GRADE02","parsed"] = "very slow gait (<0.60 m/s)"
+  binvar["GAIT_GRADE02","class"] = "Physical Functioning"
+  
+  #grip strength
+  #Chai, L., Zhang, D. & Fan, J. Comparison of grip strength measurements for predicting all-cause mortality among adults aged 20+ years from the NHANES 2011-2014. Sci. Rep. 14, 29245 (2024).
+    #26 and 16 for max #but didn't estimate, just used from literature #looks reasonable
+    #they show max and sum of max perform the same; normalizing by BMI worsens
+  #Huemer, M.-T. et al. Grip strength values and cut-off points based on over 200,000 adults of the German National Cohort - a comparison to the EWGSOP2 cut-off points. Age Ageing 52, (2023).
+    #29 and 18 #max grip #looks reasonable #*****used these
+  #MGDCGSZ: sum of largest readings
+  #MGXH1T1-MGXH1T3: three measurements on hand 1# MGXH2T1-MGXH2T3 for hand 2
+  #notes:
+    #they don't give a reason for people that didn't take test (???)
+  gripVar = c(sprintf("MGXH1T%d",1:3),sprintf("MGXH2T%d",1:3))
+  Nmeas = apply(!is.na(exam[pts,gripVar]),1,sum,na.rm=T)
+  gr = apply(exam[pts,gripVar],1,max,na.rm=T)
+  b[,"GRIP"] = NA
+  logi = gr >= 29 & clinic[pts,"sex"]==1 #males #healthy
+  logi[is.na(logi)] = F
+  b[pts,"GRIP"][logi] = 0
+  logi = gr < 29 & clinic[pts,"sex"]==1 #males
+  logi[is.na(logi)] = F
+  b[pts,"GRIP"][logi] = 1
+  logi = gr >= 18 & clinic[pts,"sex"]==2 #females #healthy
+  logi[is.na(logi)] = F
+  b[pts,"GRIP"][logi] = 0
+  logi = gr < 18 & clinic[pts,"sex"]==2 #females 
+  logi[is.na(logi)] = F
+  b[pts,"GRIP"][logi] = 1
+  #drop anybody with insufficient measurements #NOTE: max(na.rm=T) defaults to -Inf so you need this
+  b[pts,"GRIP"][Nmeas < 2] = NA #don't drop below 1
+  
+  binvar["GRIP","name"] = "GRIP"
+  binvar["GRIP","parsed"] = "weak grip"
+  binvar["GRIP","class"] = "Physical Functioning"  
+  
+  #cognitive variables
+  #CERAD
+    #Sotaniemi, M. et al. CERAD-neuropsychological battery in screening mild Alzheimer’s disease: CERAD-nb in screening mild Alzheimer’s disease. Acta Neurol. Scand. 125, 16–23 (2012). #Table 3
+      #\cite{Sotaniemi2012-uq}
+    #NHANES also includes incorrect recall ("intrusive") but these don't correlate with age so ignoring
+  ceradFail = clinic[,"CFDCRNC"] %in% c(2:4) #assume they would have failed the test if they look it #2: communication problem, 3: physical limitation, 4: quit/gave up 
+  ceradFail[is.na(ceradFail)] = F
+  #CFDCST1-3 (CERAD Word List Learning Trials 1-3) #0-30
+  cvars = sprintf("CFDCST%d",1:3)
+  #< 17: alzhiemer's; \cite{Sotaniemi2012-uq}
+  b[,"CERAD"] = ( apply(clinic[,cvars],1,mean,na.rm=T)*length(cvars) < 17) #<15 looks good, <19 looks too aggressive
+  b[ceradFail,"CERAD"] = 1
+  #CFDCSR (CERAD Total Score) 0-10 #"Score Delayed Recall"
+    #< 4: alzhiemer's; \cite{Sotaniemi2012-uq}
+  b[,"CERADDR"] = ( clinic[,"CFDCSR"] < 4) #<4 looks fine
+  b[ceradFail,"CERADDR"] = 1
+  #animal fluency (AFT) #worst-looking of the bunch
+  b[,"AFT"] = 1*(clinic[,"CFDAST"] < 13)
+  logi = clinic[,"CFDAPP"] == 2 #failed
+  logi[is.na(logi)] = F
+  b[logi,"AFT"] = 1 #assume pretest fails would be deficit
+  #digit symbol (DSST)
+  b[,"DSST"] = 1*(clinic[,"CFDDS"] < 27) #\cite{Rosano2008-hq}
+  logi = clinic[,"CFDDPP"] == 2 #failed
+  logi[is.na(logi)] = F
+  b[logi,"DSST"] = 1 #assume pretest fails would be deficit
+
+  binvar["CERAD","name"]   = "CERAD"
+  binvar["CERAD","parsed"] = "Verbal memory (CERAD)"
+  binvar["CERAD","class"]  = "Cognitive Functioning"  
+  binvar["CERADDR","name"]   = "CERADDR"
+  binvar["CERADDR","parsed"] = "Delayed recall (CERAD)"
+  binvar["CERADDR","class"]  = "Cognitive Functioning"  
+  binvar["AFT","name"]      = "AFT"
+  binvar["AFT","parsed"]    = "Semantic fluency (AFT)"
+  binvar["AFT","class"]     = "Cognitive Functioning"   
+  binvar["DSST","name"]     = "DSST"
+  binvar["DSST","parsed"]   = "Processing speed (DSST)"
+  binvar["DSST","class"]    = "Cognitive Functioning"  
+
+  #check gating - PFQ variables
+  #gatelogi = clinic[,"age"] < 59.001 & clinic[,"PFQ049"] == 2 & clinic[,"PFQ057"] == 2 & clinic[,"PFQ059"] == 2
+  gatelogi = clinic[,"age"] < 59.001 & (apply(clinic[,c("PFQ049","PFQ057","PFQ059")] == 2,1,mean,na.rm=T) > .99) #handles NAs
+  gatelogi[is.na(gatelogi)] = F
+  cuts = c(.3,.6,.9)
+  names(cuts)=sprintf("grade%02d",1:length(cuts))
+  namescuts2=c("some diff","much diff","unable to") #do not do looks like it should be assumed to be 1
+  ord = list()
+  for (i in 1:nrow(ordvar))
+  {
+    recode = rep(NA,nrow(clinic))
+    
+    #impute gated as 0
+    recode[gatelogi] = 0
+    
+    currentcodes = strsplit(ordvar[i,"codes"],";;")[[1]]
+    newcodes = strsplit(ordvar[i,"recode"],";;")[[1]]
+    for (jj in 1:length(newcodes))
+    {
+      logi = clinic[,ordvar[i,"name"]] == currentcodes[jj]
+      logi[is.na(logi)] = F
+      recode[logi] = newcodes[jj]
+    }
+    recode = as.numeric(recode)
+  
+
+  
+    #now convert to binary
+    df = list()
+    for (jj in 1:length(cuts))
+    {
+      df[[jj]] = as.integer(recode >= cuts[jj])
+    }
+    df = do.call(cbind,df)
+    colnames(df)=sprintf("%s_%s",ordvar[i,"name"],names(cuts))
+    ord[[i]] = df
+ 
+  }
+  ord = do.call(cbind,ord)
+
+  b = data.frame(survey=clinic[,"survey"],age=clinic[,"age"],sex=clinic[,"sex"],b,ord)
+  colnames(b)=toupper(colnames(b))
+
+  ordvar2 = data.frame(name=colnames(ord),parsed=NA)
+  for (i in 1:nrow(ordvar))
+  {
+    logi = grepl(ordvar[i,"name"],ordvar2[,"name"])
+    ordvar2[logi,"parsed"] = sprintf("%s %s",namescuts2,tolower(ordvar[i,"description"]))
+  }
+  ordvar2[,"class"] = "Physical Functioning"
+  ordvar2[,"direction"] = 1
+
+  bcode = rbind(binvar[,c("name","parsed","class","direction")],ordvar2)
+  
+  bcode[,"name"] = toupper(bcode[,"name"])
+  rownames(bcode) = bcode[,"name"]
+  
+  bcode = bcode[setdiff(rownames(bcode),drop),]
+  
+  bcode[,"missingness"] = apply(is.na(b[,rownames(bcode)]),2,mean)
+  bcode[,"cor_age"] = NA
+  for (jj in 1:nrow(bcode)) bcode[jj,"cor_age"] = cor(b[,"AGE"],b[,rownames(bcode)[jj]],use='pairwise.complete')
+  
+  #drop young people
+  print("dropping ages < 20")
+  b = subset(b,AGE >= 20)
+  
+  #drop wierd surveys
+  #print("dropping weird survey years (keeping 4-10)")
+  #b = subset(b,SURVEY%in%4:10)
+  
+  #fix specific codes
+  b["BPQ080","parsed"]="high cholesterol"
+  b["RXQ510","parsed"]="told aspirin"
+  if(save)
+  {
+    write.csv(b,file)
+    write.csv(bcode,codefile)
+  }
+  
+  
+  #add quasi-demographic data
+  #auxiliary variables
+  #auxiliary variables
+  keepVar = c("menopause","everPreg","pregNow","regularPeriods","ageLastPeriod","pregMonth")
+  nms = c("menopause","ever pregnant","pregnant","regular periods","age at last period","month of pregnancy")
+  auxVar = c(regularPeriod="RHQ030",regularPeriod="RHQ031",reasonNotRegularPeriod="RHQ040",reasonNotRegularPeriod="RHD042",everPreg="RHD130",everPreg="RHQ131",pregNow="RHD143",pregNow="RHQ141",ageLastPeriod="RHQ060",monthsPreg="RHQ151",monthsPreg="RHD152")
+  isBinary = c(T,T,F,F,T,T,T,T,F,F,F) #means 1: yes, 2: no
+  if(length(isBinary)!=length(auxVar)) stop("auxVar and isBinary not same length!")
+  binAuxVars = auxVar[isBinary]
+  aux = clinic[,auxVar]
+  pts = intersect(rownames(clinic),rownames(exam))
+  
+  auxcode = data.frame(name=keepVar) 
+  auxcode[,"parsed"] = nms
+  auxcode[,"class"] = "female reproduction"
+  auxcode[,"direction"] = NA
+
+  
+  for (j in 1:length(binAuxVars))
+  {
+    recode = rep(NA,nrow(aux))
+    logi = aux[,binAuxVars[j]] == 1
+    logi[is.na(logi)] = F
+    recode[logi] = 1
+    logi = aux[,binAuxVars[j]] == 2
+    logi[is.na(logi)] = F
+    recode[logi] = 0
+    aux[,binAuxVars[j]] = recode
+    
+    #impute???
+    warning("to do: look up the binary variables and check gating")
+  }
+  #combine repeats / different encodings
+  combs = list(regularPeriods=c("RHQ030","RHQ031"),
+               everPreg=c("RHD130","RHQ131"),
+               pregNow=c("RHD143","RHQ141")
+                )
+  drop = character()
+  for (kk in 1:length(combs))
+  {
+    aux[,names(combs)[[kk]]] = as.integer(apply(aux[,combs[[kk]]],1,mean,na.rm=T) > 1e-5) #any > 0 will trigger
+  }
+  
+  
+  aux[,"ageLastPeriod"] = NA #defaults to NA
+  aux[,"ageLastPeriod"] = aux[,"RHQ060"]
+  logi = aux[,"RHQ060"] > 81 #refused or unknown
+  logi[is.na(logi)] = F
+  aux[logi,"ageLastPeriod"] = NA
+  
+  aux[,"menopause"] = NA
+  logi = aux[,"regularPeriods"] > .5 #you have regular periods so obviously not menopausal
+  logi[is.na(logi)] = F
+  aux[logi,"menopause"] = 0
+  logi = aux[,"RHQ040"] == 5 #going/gone through menopause
+  logi[is.na(logi)] = F
+  aux[logi,"menopause"] = 1
+  logi = aux[,"RHD042"] == 7 #menopause or hysterectomy #NEEDS UPDATING - there's more than just this one!
+  logi[is.na(logi)] = F
+  aux[logi,"menopause"] = 1
+  
+  
+  #pregnant now?
+  #note: RHD143 not asked past age 44, RHQ141 not asked past age 60 - note difference! (both "pregnant now?")
+  #logi = aux[,"regularPeriods"] > .5 #can't be pregnant if having regular periods #WRONG - they ask in the LAST 12 MONTHS
+  #logi[is.na(logi)] = F
+  #aux[logi,"pregNow"] = 0
+  logi = aux[,"menopause"] > .5 #can't be pregnant if menopausal
+  logi[is.na(logi)] = F
+  aux[logi,"pregNow"] = 0
+  logi = aux[,"everPreg"] < .5 #can't be pregnant if never pregnant #shouldn't do anything
+  logi[is.na(logi)] = F
+  aux[logi,"pregNow"] = 0
+  logi = clinic[,"age"] > 60 & is.na(aux[,"pregNow"]) #not asked, assume post-menopausal so not possible
+  logi[is.na(logi)] = F
+  aux[logi,"pregNow"] = 0
+  
+  #pregnancy month
+  aux[,"pregMonth"] = aux[,"RHQ151"]
+  aux[is.na(aux[,"pregMonth"]),"pregMonth"] = aux[is.na(aux[,"pregMonth"]),"RHD152"]
+  logi = aux[,"pregMonth"] > 10 #77 refused, 99 don't know
+  logi[is.na(logi)] = F
+  aux[logi,"pregMonth"] = NA
+
+  #pregnant so not menopausal
+  logi = aux[,"pregNow"] == 1 #prengant now!
+  logi[is.na(logi)] = F
+  aux[logi,"menopause"] = 0
+
+  
+  if(save)
+  {
+    write.csv(aux,auxFile)
+    write.csv(auxcode,auxCodeFile)
+  }
+  
+  
+    rm(clinic)
+}
+
+```
+
+```{r}
+fiVar = setdiff(colnames(b),c("SURVEY","AGE","SEX"))
+
+#must be sd > 0
+s = apply(b[,fiVar],2,sd,na.rm=T)
+s[is.na(s)] = -Inf
+fiVar = fiVar[s > 0]
+```
+
+#must both be measured in this wave!
+```{r}
+C = cor(b[,fiVar],use='pairwise.complete')
+keep = 1:ncol(C)
+names(keep)=colnames(C)
+#iteratively drop the worst offender
+while (sum(is.na(C[keep,keep]))>0)
+{
+  cat(".")
+  ind = which.max(apply(is.na(C[keep,keep]),1,sum))
+  keep = keep[-ind]
+}
+fiVar= fiVar[keep]
+```
+
+```{r}
+save=T
+if(save)
+{
+  write.csv(bcode[fiVar,],sprintf("%s/clinic_fi_candidates.csv",outputDir))
+}
+```
+
+
+check missingness
+looks like you need to drop:
+-under 20
+-surveys: 66, 12, and 1-2 (i.e. keep 4:10)
+-clearly something is gated at age 40
+```{r}
+library(scico)
+plotdata = data.frame(survey=b[,"SURVEY"],age=b[,"AGE"],missing=apply(is.na(b[,rownames(bcode)]),1,mean))
+ggplot(plotdata,aes(x=age,y=missing,colour=ordered(survey)))+
+  stat_summary()+
+  scale_colour_scico_d(palette="roma")
+
+```
+
+```{r}
+bcode[,"under40missing"] = apply(is.na(subset(b,AGE < 40 & SURVEY%in%4:10)[,rownames(bcode)]),2,mean)
+bcode[,"40plusmissing"] = apply(is.na(subset(b,AGE >= 40 & SURVEY%in%4:10)[,rownames(bcode)]),2,mean)
+bcode[,"missingagegap"] = bcode[,"under40missing"] - bcode[,"40plusmissing"] 
+```
+
+```{r}
+plotdata = rbind(
+              data.frame(age = "under 40", missing=apply(is.na(subset(b,AGE < 40 & SURVEY%in%4:10)[,rownames(bcode)]),2,mean),var=rownames(bcode)),
+              data.frame(age = ">= 40", missing=apply(is.na(subset(b,AGE >= 40 & SURVEY%in%4:10)[,rownames(bcode)]),2,mean),var=rownames(bcode))
+)
+ggplot(plotdata,aes(x=var, y = missing,colour=age))+
+  geom_point()
+```

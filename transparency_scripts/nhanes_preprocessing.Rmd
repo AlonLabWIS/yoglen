@@ -1,0 +1,1181 @@
+---
+title: "NHANES  Preprocessing"
+output: html_notebook
+---
+
+Glen Jan 2025
+
+For preprocessing for all of the non-binary stuff
+
+
+```{r}
+gRootName = "nhanes"
+gRootDir = "C:/Users/Glen/OneDrive - Dalhousie University/Documents"  #where scripts are
+outputDir = "C:/postdoc/nhanes" #analysis directory
+dataDir =  "C:/data/nhanes"
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+source("C:/postdoc/latent_variable_models.R")
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+library(RNHANES)
+```
+
+
+
+# load in data
+```{r}
+ageCol = "RIDAGEYR"
+sexCol = "RIAGENDR"
+```
+
+```{r}
+lab = read.csv(sprintf("%s/nhanes_lab/nhanes_lab.csv",dataDir))
+logi = duplicated(lab[,"SEQN"])
+print(sprintf("dropping %d lab entries due to duplicates",sum(logi)))
+lab = lab[!logi,]
+rownames(lab)=lab[,"SEQN"]
+demo = read.csv(sprintf("%s/nhanes_demo/nhanes_demo.csv",dataDir))
+rownames(demo)=demo[,"SEQN"]
+
+
+labcodex = read.csv(sprintf("%s/nhanes_lab/nhanes_lab_vars.csv",dataDir))
+rownames(labcodex)=labcodex[,"Variable.Name"]
+democodex = read.csv(sprintf("%s/nhanes_demo/nhanes_demo_vars.csv",dataDir))
+rownames(democodex)=democodex[,"Variable.Name"]
+
+examcodex = read.csv(sprintf("%s/nhanes_exam/nhanes_exam_vars.csv",dataDir))
+rownames(examcodex)=examcodex[,"Variable.Name"]
+
+codex = labcodex
+newvars = setdiff(rownames(democodex),rownames(codex))
+codex = rbind(codex,democodex[newvars,])
+
+
+#special cases:
+#lookup here:
+  #https://wwwn.cdc.gov/nchs/nhanes/search/default.aspx
+codex["LBDCOTSI","Variable.Description"] = "Cotinine (nmol/L)"
+codex[c("DCDSTAT"),"Variable.Description"] = "Lead dust status"
+codex["DCDINDEX","Variable.Description"] = "Lead dust index"
+codex[c("LBDD3LC"),"Variable.Description"] = "Lead dust comment"
+codex[c("LBDDFSLC"),"Variable.Description"] = "Lead dust comment"
+codex[c("LBDDWSLC"),"Variable.Description"] = "Lead dust comment"
+codex[c("LBDZBZLC"),"Variable.Description"] = "Benzene comment"
+codex[c("LBDZCFLC"),"Variable.Description"] = "Chloroform comment"
+codex[c("LBDZDBLC"),"Variable.Description"] = "1,4-dichlorobenzene comment"
+codex[c("LBDZEBLC"),"Variable.Description"] = "Ethylbenzene comment"
+codex[c("LBDZMBLC"),"Variable.Description"] = "MTBE comment"
+codex["LBDZOXLC","Variable.Description"] = "o-Xylene comment"
+codex["LBDZTELC","Variable.Description"] = "Tetrachloroethene comment"
+codex["LBDZTILC","Variable.Description"] = "Tetrachloroethene comment"
+codex["LBDZTOLC","Variable.Description"] = "Toluene comment"
+codex["LBDZXYLC","Variable.Description"] = "m,p-Xylene comment"
+codex["LB2DAY","Variable.Description"] = "days between exams"
+codex["LBD167LC","Variable.Description"] = "PCB167 comment code"
+codex["LBDSCRSI","Variable.Description"] = "Creatinine (umol/L)"
+codex["LBXPV6","Variable.Description"] = "HPV06"
+codex["LBDPENLC","Variable.Description"] = "Pentadecanoic acid comment"
+codex["LBX9AL","Variable.Description"] = "Nonanaldehyde (ng/mL)"
+#more...
+codex["LBDCOTLC","Variable.Description"] = "Cotinine detected"
+#manual:
+codex["LBDRFOSI","Variable.Description"] = "RBC folate (nmol/L)"
+codex["SSTNT","Variable.Description"] = "Cardiac hs-Troponin T (ng/L)"
+codex["SSB2M","Variable.Description"] = "Beta-2 microglobulin (mg/L)"
+codex["SSCYST","Variable.Description"] = "Cystatin C (mg/L)"
+codex["SSTNIALC","Variable.Description"] = "Cardiac hs-Troponin not detectable"
+codex["SSTNISLC","Variable.Description"] = "Cardiac hs-Troponin comment" #0: measurable, 1: unblinded, 2: imputed
+codex["SSB2M","Variable.Description"] = "Beta-2 microglobulin (mg/L)" 
+
+
+
+#check for empties and impute
+logi = codex[,"Variable.Description"]==""
+subcodex = codex[logi,]
+for (i in 1:nrow(subcodex))
+{
+  v = subcodex[i,"Variable.Name"]
+  logi = codex[,"Variable.Name"]==v
+  d = codex[logi,"Variable.Description"]
+  d = d[d!=""]
+  logi[is.na(logi)] = F
+  d = c(d,d,codex[logi,"Data.File.Description"][1])
+  codex[logi,"Variable.Description"] = majorityVote2(d)
+}
+#drop duplicates
+codex = codex[!duplicated(codex[,"Variable.Name"]),]
+```
+
+
+#exam data
+```{r}
+exam = read.csv(sprintf("%s/nhanes_exam/nhanes_exam.csv",dataDir))
+rownames(exam)=exam[,"SEQN"]
+```
+
+
+
+#clean up lab data
+
+drop lab variables related to contaminants/antigens/comments
+```{r}
+dropComments=T
+if(dropComments)
+{
+  #descriptions
+  keywords = c("comment")
+  logi = grepl(keywords[1],tolower(labcodex[,"Variable.Description"]))
+  logi[is.na(logi)] = F
+  for (j in 2:length(keywords))
+  {
+    if(j < 2) break
+    logiup = grepl(keywords[j],tolower(labcodex[,"Variable.Description"]))
+    logiup[is.na(logiup)] = F
+    logi = logi | logiup
+  }
+  drop = labcodex[logi,"Variable.Name"]
+  print(sprintf("dropping another %d variables due to comment codes",length(drop)))
+  lab = lab[,setdiff(colnames(lab),drop)]
+}
+
+dropWeights=T
+if(dropWeights)
+{
+  #descriptions
+  keywords = c("weight")
+  logi = grepl(keywords[1],tolower(labcodex[,"Variable.Description"]))
+  logi[is.na(logi)] = F
+  for (j in 2:length(keywords))
+  {
+    if(j < 2) break
+    logiup = grepl(keywords[j],tolower(labcodex[,"Variable.Description"]))
+    logiup[is.na(logiup)] = F
+    logi = logi | logiup
+  }
+  drop = labcodex[logi,"Variable.Name"]
+  print(sprintf("dropping another %d variables due to weights",length(drop)))
+  lab = lab[,setdiff(colnames(lab),drop)]
+}
+
+dropContaminants=T
+if(dropContaminants)
+{
+  #files 
+  keywords = c("cadmium","phthalates","dioxins","volatile organic","pesticides","allergens","perfluoroalkyl")
+  logi = grepl(keywords[1],tolower(labcodex[,"Data.File.Description"]))
+  logi[is.na(logi)] = F
+  for (j in 2:length(keywords))
+  {
+    if(j < 2) break
+    logiup = grepl(keywords[j],tolower(labcodex[,"Data.File.Description"]))
+    logiup[is.na(logiup)] = F
+    logi = logi | logiup
+  }
+  drop = labcodex[logi,"Variable.Name"]
+  print(sprintf("dropping %d variables due to contaminants",length(drop)))
+  lab = lab[,setdiff(colnames(lab),drop)]
+  
+  #descriptions
+  keywords = c("pcb","dioxin")
+  logi = grepl(keywords[1],tolower(labcodex[,"Variable.Description"]))
+  logi[is.na(logi)] = F
+  for (j in 2:length(keywords))
+  {
+    if(j < 2) break
+    logiup = grepl(keywords[j],tolower(labcodex[,"Variable.Description"]))
+    logiup[is.na(logiup)] = F
+    logi = logi | logiup
+  }
+  drop = labcodex[logi,"Variable.Name"]
+  print(sprintf("dropping another %d variables due to contaminants",length(drop)))
+  lab = lab[,setdiff(colnames(lab),drop)]
+}
+
+dropAntigensDisease=T
+if(dropAntigensDisease)
+{
+  
+  #files 
+  keywords = c("antigen","hepatitis","toxoplasma")
+  logi = grepl(keywords[1],tolower(labcodex[,"Data.File.Description"]))
+  logi[is.na(logi)] = F
+  for (j in 2:length(keywords))
+  {
+    if(j < 2) break
+    logiup = grepl(keywords[j],tolower(labcodex[,"Data.File.Description"]))
+    logiup[is.na(logiup)] = F
+    logi = logi | logiup
+  }
+  drop = labcodex[logi,"Variable.Name"]
+  print(sprintf("dropping %d variables due to antigens or disease",length(drop)))
+  lab = lab[,setdiff(colnames(lab),drop)]
+}
+
+
+```
+drop non-numeric lab
+```{r}
+dropNonNumeric=T
+if(dropNonNumeric)
+{
+  drop=numeric()
+  for (j in 1:ncol(lab)) 
+  {
+    if(!is.numeric(lab[,j])) drop = c(drop,j) 
+  }
+  print(sprintf("dropping another %d variables that aren't numeric",length(drop)))
+  lab = lab[,-drop]
+}
+```
+drop rare measurements
+```{r}
+minN = 50
+logi = apply(!is.na(lab),2,sum) >= minN
+print(sprintf("dropping %d variables with insufficient data (min %d)",sum(!logi),minN))
+lab = lab[,logi]
+```
+
+add new composite lab variables
+```{r}
+#add chronic inflammation
+#LB2CRP is subset of LBXCRP
+infVars = c(crp="LBXCRP",fib="LBXFB",neut="LBDNENO",lymph="LBDLYMNO",mono="LBDMONO",plate="LBXPLTSI")
+#apply(lab[,infVars],2,range,na.rm=T)
+#they're all positive except 2 values for monocytes
+
+#FIB_TO_CRP different from others (correlations)
+lab[,"FIB_TO_CRP"] = lab[,"LBXFB"]/lab[,"LB2CRP"] 
+#neutrophil-to-lymphocyte ratio
+lab[,"NLR"] = lab[,"LBDNENO"]/lab[,"LBDLYMNO"]
+#lymphocyte-to-monocyte ratio
+mono = lab[,"LBDMONO"]
+logi = mono < .1
+logi[is.na(logi)] = F
+mono[logi]  = .1 #bottom code for log transform #sort(temp[,"LBDMONO"])[1:10] #0.0 0.0 0.1 0.1
+lab[,"LMR"] = lab[,"LBDLYMNO"]/mono
+#platelet-to-lymphocyte ratio
+lab[,"PLR"] = lab[,"LBXPLTSI"]/lab[,"LBDLYMNO"]
+
+#pooled counts seems like immune mediated chronic inflammation
+lab[,"IMMUNEINF"] = scale(log(lab[,"NLR"]))-scale(log(lab[,"LMR"]))+scale(log(lab[,"PLR"]))
+lab[,"IMMUNEINF"] = lab[,"IMMUNEINF"]/3
+logi = lab[,"IMMUNEINF"] < -5 #top-code outliers
+logi[is.na(logi)] = F
+lab[logi,"IMMUNEINF"] = -5
+logi = lab[,"IMMUNEINF"] > 5 #top-code outliers
+logi[is.na(logi)] = F
+lab[logi,"IMMUNEINF"] = 5
+lab[,"IMMUNEINF"] = exp(lab[,"IMMUNEINF"]) #rescale, will de-scale later
+
+labcodex["IMMUNEINF","Variable.Name"] = "IMMUNEINF"
+labcodex["IMMUNEINF","Data.File.Description"] = "Chronic inflammation"
+labcodex["IMMUNEINF","Variable.Description"] = "imm. c. inflammation"
+
+labcodex["FIB_TO_CRP","Variable.Name"] = "FIB_TO_CRP"
+labcodex["FIB_TO_CRP","Data.File.Description"] = "Chronic inflammation"
+labcodex["FIB_TO_CRP","Variable.Description"] = "fibrinogen to crp"
+
+labcodex["NLR","Variable.Name"] = "NLR"
+labcodex["NLR","Data.File.Description"] = "Chronic inflammation"
+labcodex["NLR","Variable.Description"] = "imm. c. inflammation"
+
+labcodex["LMR","Variable.Name"] = "LMR"
+labcodex["LMR","Data.File.Description"] = "Chronic inflammation"
+labcodex["LMR","Variable.Description"] = "imm. c. inflammation"
+
+labcodex["PLR","Variable.Name"] = "PLR"
+labcodex["PLR","Data.File.Description"] = "Chronic inflammation"
+labcodex["PLR","Variable.Description"] = "imm. c. inflammation"
+```
+
+more complex inflammation
+```{r}
+#temp = lab[,infVars]
+#logi = temp[,"LBDMONO"] < .1
+#logi[is.na(logi)] = F
+#temp[logi,"LBDMONO"]  = .1 #bottom code for log transform #sort(temp[,"LBDMONO"])[1:10] #0.0 0.0 0.1 0.1
+#for (j in 1:ncol(temp)) temp[,j] = scale(log(temp[,j]))
+
+#pc = prcomp2(temp)
+#plot(pc$sdev) #I see three
+#chat gpt says: all same direction is overall inflammation, CRP high and lymphocyte low is acute (high) vs chronic (low), PC3 (neno+mono vs fib+platelet) is coagulation vs immune inflammation
+```
+
+combine repeated lab variables
+issues:
+  -lots of repeated measurements with different units
+  -some use different methods so they're correlated but different
+  -better to drop based on correlations, I think
+```{r}
+remove_parentheticals <- function(text) {
+  gsub("\\([^)]*\\)", "", text)
+}
+
+remove_punctuation <- function(text) {
+  gsub("[[:punct:]]", "", text)
+}
+
+remove_whitespace <- function(text) {
+  gsub("\\s+", "", text)
+}
+
+
+```
+
+```{r}
+#nm = codex[colnames(lab),"Variable.Description"]
+#for (i in 1:length(nm))
+#{
+#  nm[i] = remove_parentheticals(nm[i])
+#  nm[i] = remove_punctuation(nm[i])
+#  nm[i] = remove_whitespace(nm[i])
+#  nm[i] = tolower(nm[i])
+#}
+#logi = nm%in%nm[which(duplicated(nm))]
+#View(codex[colnames(lab)[logi],])
+
+```
+
+specific combinations
+i.e. variables that were measured in different waves with different names but are otherwise the same
+```{r}
+CombineVars = function(x,v1,v2)
+{
+  logi = is.na(x[,v1])
+  x[logi,v1] = x[logi,v2]
+  x[,v2] = x[,v1]
+  return(x)
+}
+#free t3
+#vars=c("SST3F", "LBXT3F")
+#logi = is.na(lab[,"LBXT3F"])
+#lab[logi,"LBXT3F"] = lab[logi,"SST3F"]
+#lab[,"SST3F"] = lab[,"LBXT3F"]
+
+lab = CombineVars(lab,"LBXT3F","SST3F") #free t3
+lab = CombineVars(lab,"LBXCPSI","LB2CPSI") #c-peptide #not necessary but whatever
+lab = CombineVars(lab,"SSCYST","SSCYPC") #cystatin
+#SSSHBG and LBXSHBG are the same but have difference medians/distributions even when age/sex corrected so I don't want to pool them
+```
+
+automated combiner
+```{r,warning=F}
+corCut = .97
+minN = 100
+impute=T
+drop=rep(F,ncol(lab))
+print("correlation-based exclusions:")
+for (i in 1:(ncol(lab)-1))
+{
+  if(drop[i]) next
+  for (j in (i+1):ncol(lab))
+  {
+    logiI = !is.na(lab[,i])
+    logiJ = !is.na(lab[,j])
+    logi = logiI & logiJ
+    if(sum(logi) < minN) next #not enough data
+    rho = cor(lab[logi,i],lab[logi,j],use='pairwise.complete')
+    if(is.na(rho)) next
+    if(rho > corCut)
+    {
+      #one must be a subset of the other
+      if(all(logiI[logiJ])) #all J are in I, so keep I
+      {
+        drop[j]=T
+        print(sprintf("%s (%s) and %s (%s) correlated past cut of %.02f (rho: %.2f; keeping i)",codex[colnames(lab)[i],"Variable.Description"],colnames(lab)[i],codex[colnames(lab)[j],"Variable.Description"],colnames(lab)[j],corCut,rho))
+      }
+      else if(all(logiJ[logiI])) #all I are in J, so keep J
+      {
+        drop[i]=T
+        print(sprintf("%s (%s) and %s (%s) correlated past cut of %.02f (rho: %.2f; keeping j)",codex[colnames(lab)[i],"Variable.Description"],colnames(lab)[i],codex[colnames(lab)[j],"Variable.Description"],colnames(lab)[j],corCut,rho))
+      }
+      else
+      {
+        if(impute)
+        {
+          mod = lm(i~j,data.frame(i=lab[logi,i],j=lab[logi,j]))
+          lab[logiJ & !logiI,i] = predict(mod,data.frame(j=lab[logiJ & !logiI,j]))
+          print(sprintf("%s (%s) and %s (%s) correlated past cut of %.02f (rho: %.2f; IMPUTING and keeping i)",codex[colnames(lab)[i],"Variable.Description"],colnames(lab)[i],codex[colnames(lab)[j],"Variable.Description"],colnames(lab)[j],corCut,rho))
+          drop[j]=T
+        }
+        else
+        {
+          print(sprintf("NON-OVERLAPPING %s (%s) and %s (%s) correlated but skipping",codex[colnames(lab)[i],"Variable.Description"],colnames(lab)[i],codex[colnames(lab)[j],"Variable.Description"],colnames(lab)[j],corCut,rho))
+        }
+      }
+      
+    }
+  }
+  if(drop[i]) next
+}
+print(sprintf("dropping %d variables that are collinear (cor > %.02f)",sum(drop),corCut))
+lab = lab[,!drop]
+```
+
+pre-screen to find significant correlations with age...
+```{r,warning=F}
+pt = intersect(rownames(demo),rownames(lab))
+lab[,"age"] = NA
+lab[pt,"age"] = demo[pt,"RIDAGEYR"]
+
+C1 = cor(lab[,"age"],lab,use='pairwise.complete',method='spearman')[1,]
+
+p1 = numeric()
+for (i in 1:ncol(lab)) p1[i] = tryCatch(cor.test(lab[,"age"],lab[,i],use='pairwise.complete',method='spearman')$p.value,error=function(e)return(Inf))
+p1[is.na(p1)] = 1
+```
+
+```{r}
+plot(ecdf(C1))
+plot(ecdf(abs(C1)))
+```
+
+```{r}
+plot(ecdf(log(p1+1e-10,10)))
+abline(v=log(.05,10))
+```
+
+```{r}
+df = data.frame(p=p1,C=C1)
+ggplot(df,aes(x=C,y=-log(p+1e-10,10),colour=factor(p>0.05)))+
+  geom_point()+
+  #scale_y_log10()+
+  annotation_logticks(sides="l")
+
+ggplot(subset(df,p<.05),aes(x=abs(C),y=log(p+1e-10,10)))+
+  geom_point()+
+  #scale_y_log10()+
+  annotation_logticks(sides="l")
+```
+
+#cut all weak and/or non-significant correlations
+```{r}
+#logi = abs(C1)>.1 & p1 < .05 
+logi = p1 < .05 
+logi[is.na(logi)] = F
+labVars = colnames(lab)[logi]
+#View(labcodex[useLabVars,])
+
+#specific drops - because these aren't in older peopel!
+#Chlamydia, Cytomegalovirus, Epstein Barr, Epstein Barr Index, Herpes I, Varicella
+labVars = setdiff(labVars,c("URXUCL", "LBXIGG", "SSEBV", "SSEBVIND", "SSXHE1", "VARICELL"))
+
+#drop weird binary/multinomial variables - mostly comments
+u = apply(lab[,labVars],2,unlen)
+labVars = labVars[u >= 10]
+```
+
+#check for non-normal behaviour
+```{r}
+skew = apply(lab[,labVars],2,skew,na.rm=T) #excess skew
+plot(ecdf(skew))
+mn = apply(lab[,labVars],2,min,na.rm=T) 
+plot(ecdf(mn))
+mx = apply(lab[,labVars],2,max,na.rm=T) 
+plot(ecdf(mx))
+```
+
+add age and sex for cuts
+```{r}
+lab[,"sex"] = NA
+pts = intersect(rownames(lab),rownames(demo))
+lab[pts,"sex"] = demo[pts,"RIAGENDR"]-1
+lab[,"age"] = NA
+lab[pts,"age"] = demo[pts,"RIDAGEYR"]
+```
+
+```{r}
+#fix negatives - not possible to have negative values, so assume they're a mistake
+#estradiol
+logi = lab[,"SSSE2"] < 0
+logi[is.na(logi)] = F
+lab[logi,"SSSE2"] = NA
+#testosterone
+logi = lab[,"SSTESTO"] < 0
+logi[is.na(logi)] = F
+lab[logi,"SSTESTO"] = NA
+```
+
+transform
+note: some aren't available for all ages (so pick big range) or all sexes (logicals should handle this)
+```{r,warning=F}
+labpp = lab[,labVars]
+
+# Inverse Hyperbolic Sine (IHS) / Arsinh Transformation
+IHS = function(x) return(log(x+sqrt(x^2+1))) #handles 0s #this is inverse of sinh
+IHSInv = function(x) return(sinh(x))
+LogEps = function(x,epsilon=0) return(log(x+epsilon)) #can't deal with 0s
+LogEpsInv = function(x,epsilon=0) return(exp(x)-epsilon)
+
+PickLogEpsOld = function(x,epsilon0=.1,lower=1e-10,upper=quantile(x,probs=.9,na.rm=T))
+{
+  Obj = function(par)
+  {
+    e = skew(LogEps(x,exp(par)))^2
+    e[e <= -Inf] = 1e20
+    e[is.nan(e)] = 1e20
+    return(sum(e,na.rm=T))
+  }
+  op = optim(log(epsilon0),Obj,method="Brent",lower=log(lower),upper=log(upper))
+  return(exp(op$par))
+}
+PickLogEps = function(x,males,females,epsilon0=.1,lower=1e-10,upper=quantile(x,probs=.9,na.rm=T))
+{
+  Obj = function(par)
+  {
+    y = LogEps(x,exp(par))
+    y[males] = (y[males]-mean(y[males],na.rm=T))/sd(y[males],na.rm=T)
+    y[females] = (y[females]-mean(y[females],na.rm=T))/sd(y[females],na.rm=T)
+    e = skew(y)^2
+    e[e <= -Inf] = 1e20
+    e[is.nan(e)] = 1e20
+    return(sum(e,na.rm=T))
+  }
+  op = optim(log(epsilon0),Obj,method="Brent",lower=log(lower),upper=log(upper))
+  return(exp(op$par))
+}
+#I don't like this range because of menopause
+#ageLogi = lab[,"age"] <= 60 & lab[,"age"] >= 40 #some variables aren't measured in all age ranges, this is the smallest range that gets them all
+#ageLogi[is.na(ageLogi)] = F
+ageLogi = lab[,"age"] >= 20 #avoids issues with menopause by just using everybody
+ageLogi[is.na(ageLogi)] = F
+olderLogi = lab[,"age"] > 60  #will use later
+olderLogi[is.na(olderLogi)] = F
+
+Mlogi = lab[,"sex"] == 0
+Mlogi[is.na(Mlogi)] = F
+Flogi = lab[,"sex"] == 1
+Flogi[is.na(Flogi)] = F
+standardize=T
+binary = rep(F,length(labVars))
+mpar = data.frame(var=labVars,sex="M",trans="identity",transPar=0,Nfit=NA,mu=NA,sd=NA)
+fpar = data.frame(var=labVars,sex="F",trans="identity",transPar=0,Nfit=NA,mu=NA,sd=NA)
+drop = binary
+for (j in 1:length(labVars))  #shouldn't do anything anymore (I exclude earlier)
+{
+  cat(".")
+  l = unlen(lab[,labVars[j]])
+  if(l < 2)
+  {
+    drop[j] = T
+    next
+  }
+  else if (l == 2) #shouldn't do anything anymore (I exclude earlier)
+  {
+    binary[j] = T
+    next
+  }
+  else
+  {
+    #compare transformed to untransformed and take best one
+    y = lab[,labVars[j]]
+    mm = mean(y[ageLogi & Mlogi],na.rm=T)
+    sm = sd(y[ageLogi & Mlogi],na.rm=T)
+    Nm = sum(!is.na(y[ageLogi & Mlogi]))
+
+    mf = mean(y[ageLogi & Flogi],na.rm=T)
+    sf = sd(y[ageLogi & Flogi],na.rm=T)
+    Nf = sum(!is.na(y[ageLogi & Flogi]))
+
+      
+      #pick lowest composite skew
+      if(Nm >= 2 & Nf >= 2) #use both
+      {
+        
+          #compute skew...
+      skm = skew((y[ageLogi & Mlogi]-mm)/sm)
+      ymt1 = IHS(y[ageLogi & Mlogi])
+      mm1 = mean(ymt1,na.rm=T)
+      sm1 = sd(ymt1,na.rm=T)
+      skm1 = skew((ymt1-mm1)/sm1)
+
+      skf = skew((y[ageLogi & Flogi]-mf)/sf)
+      yft1 = IHS(y[ageLogi & Flogi])
+      mf1 = mean(yft1,na.rm=T)
+      sf1 = sd(yft1,na.rm=T)
+      skf1 = skew((yft1-mf1)/sf1)
+      
+      #pick one epsilon for both sexes, otherwise it gets goofy
+      e = PickLogEps(y[ageLogi],males=Mlogi[ageLogi],females=Flogi[ageLogi])
+      em = e
+      ef = e
+      ymt2 = LogEps(y[ageLogi & Mlogi],em)
+      mm2 = mean(ymt2,na.rm=T)
+      sm2 = sd(ymt2,na.rm=T)
+      skm2 = skew((ymt2-mm2)/sm2)
+      #ef = PickLogEps(y[ageLogi & Flogi])
+      yft2 = LogEps(y[ageLogi & Flogi],ef)
+      mf2 = mean(yft2,na.rm=T)
+      sf2 = sd(yft2,na.rm=T)
+      skf2 = skew((yft2-mf2)/sf2)
+        
+          dsk1 = abs(skm1)+abs(skf1)-abs(skm)-abs(skf) #smaller = better, > 0 means no transformation is best
+          dsk2 = abs(skm2)+abs(skf2)-abs(skm)-abs(skf)
+      }
+      else if(Nm >= 2) #use just males
+      {
+            #compute skew...
+      skm = skew((y[ageLogi & Mlogi]-mm)/sm)
+      ymt1 = IHS(y[ageLogi & Mlogi])
+      mm1 = mean(ymt1,na.rm=T)
+      sm1 = sd(ymt1,na.rm=T)
+      skm1 = skew((ymt1-mm1)/sm1)
+      em = PickLogEps(y[ageLogi & Mlogi],males=Mlogi[ageLogi & Mlogi],females=Flogi[ageLogi & Mlogi])
+      ef = em
+      ymt2 = LogEps(y[ageLogi & Mlogi],em)
+      mm2 = mean(ymt2,na.rm=T)
+      sm2 = sd(ymt2,na.rm=T)
+      skm2 = skew((ymt2-mm2)/sm2)
+      
+        
+          dsk1 = abs(skm1)+abs(skm) #smaller = better, > 0 means no transformation is best
+          dsk2 = abs(skm2)+abs(skm)
+      }
+      else if (Nf >= 2) #use just females
+      {
+            #compute skew...
+      skf = skew((y[ageLogi & Flogi]-mf)/sf)
+      yft1 = IHS(y[ageLogi & Flogi])
+      mf1 = mean(yft1,na.rm=T)
+      sf1 = sd(yft1,na.rm=T)
+      skf1 = skew((yft1-mf1)/sf1)
+      ef = PickLogEps(y[ageLogi & Flogi],males=Mlogi[ageLogi & Flogi],females=Flogi[ageLogi & Flogi])
+      em = ef
+      yft2 = LogEps(y[ageLogi & Flogi],ef)
+      mf2 = mean(yft2,na.rm=T)
+      sf2 = sd(yft2,na.rm=T)
+      skf2 = skew((yft2-mf2)/sf2)
+      
+
+          dsk1 = abs(skf1)-abs(skf) #smaller = better, > 0 means no transformation is best
+          dsk2 = abs(skf2)-abs(skf)
+      }
+      else #no trans best
+      {
+        dsk1 = 1
+        dsk2 = 1
+      }
+      
+      if(dsk1 < 0 & dsk1 < dsk2) #transformation 1 best 
+      {
+        #print("t1")
+        mpar[j,"trans"] = "IHS"
+        fpar[j,"trans"] = "IHS"
+        mpar[j,"Nfit"] = Nm
+        mpar[j,"mu"] = mm1
+        mpar[j,"sd"] = sm1
+        fpar[j,"Nfit"] = Nf
+        fpar[j,"mu"] = mf1
+        fpar[j,"sd"] = sf1
+        
+        labpp[Mlogi,labVars[j]] = (IHS(lab[Mlogi,labVars[j]])-mm1)/sm1
+        labpp[Flogi,labVars[j]] = (IHS(lab[Flogi,labVars[j]])-mf1)/sf1
+        
+      } else if(dsk2 < 0 & dsk2 < dsk1) #transformation 2 best 
+      {
+        #print("t2")
+        mpar[j,"trans"] = "LogEps"
+        fpar[j,"trans"] = "LogEps"
+        mpar[j,"transPar"] = em
+        fpar[j,"transPar"] = ef
+        mpar[j,"Nfit"] = Nm
+        mpar[j,"mu"] = mm2
+        mpar[j,"sd"] = sm2
+        fpar[j,"Nfit"] = Nf
+        fpar[j,"mu"] = mf2
+        fpar[j,"sd"] = sf2
+        
+        labpp[Mlogi,labVars[j]] = (LogEps(lab[Mlogi,labVars[j]],em)-mm2)/sm2
+        labpp[Flogi,labVars[j]] = (LogEps(lab[Flogi,labVars[j]],ef)-mf2)/sf2
+        
+      } else #no transformation best
+      {
+        #print("no t")
+        mpar[j,"Nfit"] = Nm
+        mpar[j,"mu"] = mm
+        mpar[j,"sd"] = sm
+        fpar[j,"Nfit"] = Nf
+        fpar[j,"mu"] = mf
+        fpar[j,"sd"] = sf
+        
+        labpp[Mlogi,labVars[j]] = (lab[Mlogi,labVars[j]]-mm)/sm
+        labpp[Flogi,labVars[j]] = (lab[Flogi,labVars[j]]-mf)/sf
+      }
+    
+
+  }
+}
+
+save=T
+if(save)
+{
+  write.csv(mpar,sprintf("%s/data/nhanes_male_lab_mean_sd.csv",outputDir))
+  write.csv(fpar,sprintf("%s/data/nhanes_female_lab_mean_sd.csv",outputDir))
+}
+```
+
+check cleaned up data
+-mean and skew should be near 0, sd should be near 1 AT AGE 40-60 #depends on age range used, I may use ages 20+ (you have to look in prev block)
+  -strongly age-dependent can be quite different
+```{r}
+
+plotdata = rbind(
+                data.frame(vars=colnames(labpp),m=apply(labpp[ageLogi,],2,mean,na.rm=T),s=apply(labpp[ageLogi,],2,sd,na.rm=T),sk=apply(labpp[ageLogi,],2,skew,na.rm=T),age="ref"),
+                data.frame(vars=colnames(labpp),m=apply(labpp[olderLogi,],2,mean,na.rm=T),s=apply(labpp[olderLogi,],2,sd,na.rm=T),sk=apply(labpp[olderLogi,],2,skew,na.rm=T),age="older")
+                )
+ggplot(plotdata,aes(x=m,colour=age,fill=age))+
+  geom_histogram(position="identity",alpha=.2)+
+  labs(x="mean")
+
+ggplot(plotdata,aes(x=s,colour=age,fill=age))+
+  geom_histogram(position="identity",alpha=.2)+
+  labs(x="sd")
+
+ggplot(plotdata,aes(x=sk,colour=age,fill=age))+
+  geom_histogram(position="identity",alpha=.2)+
+  labs(x="skew")
+```
+
+generate all of the histograms
+```{r}
+skip=T
+labVars = sort(labVars)
+
+g = list()
+failures = numeric()
+for (i in 1:length(labVars))
+{
+  if(skip) break
+    plotdata = data.frame(x=labpp[,labVars[i]],sex=factor(lab[,"sex"],c(0,1),c("male","female")),age=lab[,"age"])
+    
+    g[[i]] = ggplot(subset(plotdata,age>=20),aes(x=x,y=..density..,colour=sex,fill=sex))+
+      geom_histogram(position="identity",alpha=.25)+
+      labs(x=labVars[i],y="Count",title=labVars[i])+ #title=sprintf("%s - lambda = %.0f",levels(df0[,"group"])[i],lambda))+
+      theme_minimal(base_size=8)+
+      theme(axis.text.x=element_text(angle=90,vjust=.5))
+  
+}
+
+
+
+library(cowplot)
+nrow = 10
+ncol = 10
+maxPer = nrow*ncol-1
+
+save=F
+if(save)
+{
+  inds = 1:maxPer
+  iter = 1
+  while(min(inds) < length(g))
+  {
+    inds = inds[inds <= length(g)]
+    l = g[inds]
+    #print(length(l))
+    #add legend
+    leg = ggdraw(cowplot::get_legend(l[[1]]))
+    for (i in 1:length(l)) l[[i]] = l[[i]] + theme(legend.position="none") 
+    l[[length(l)+1]] = leg
+
+    fileName = sprintf("%s/results/nhanes_lab_hist_%02d.png",outputDir,iter)
+    ggsave(fileName,marrangeGrob(l,nrow=nrow,ncol=ncol,top=NULL),width=16,height=16)
+    inds = inds + maxPer
+    iter=iter+1
+  }
+
+}
+```
+
+#clean up exam data
+-looks like grip and gait are the big ones
+-I want obesity as correlate
+```{r}
+#fix blood pressure and pool
+di = sprintf("BPXDI%d",1:4)
+for (j in 1:length(di)) 
+{
+  logi = exam[,di[j]] < 5
+  logi[is.na(logi)] = F
+  exam[logi,di[j]] = NA #there's a weird pileup at 0 that's probably wrong
+  logi = exam[,di[j]] > 200
+  logi[is.na(logi)] = F
+  exam[logi,di[j]] = NA #doesn't happen, but just in case
+
+}
+exam[,"BPXDI"] = apply(exam[,di],1,median,na.rm=T) #mean or median; median good for one bad value
+
+sys = sprintf("BPXSY%d",1:4)
+for (j in 1:length(sys)) 
+{
+  logi = exam[,sys[j]] < 5
+  logi[is.na(logi)] = F
+  exam[logi,sys[j]] = NA #doesn't happen, but just in case
+  logi = exam[,sys[j]] > 300
+  logi[is.na(logi)] = F
+  exam[logi,sys[j]] = NA #doesn't happen, but just in case
+
+}
+exam[,"BPXSY"] = apply(exam[,sys],1,median,na.rm=T) #mean or median; median good for one bad value
+
+#binarize
+exam[,"pulse"] = exam[,"BPXPULS"]-1 #abnormal pulse
+
+#combine 20 foot walk
+#they changed the name after 99
+  #age-dependent distribution looks basically the same to me
+comb = c("MSXW20TM","MSXWTIME")
+logi = is.na(exam[,"MSXW20TM"])
+logi[is.na(logi)] = F
+exam[logi,"MSXW20TM"] = exam[logi,"MSXWTIME"]
+
+
+#combine balance variables
+#BAQ110 gates
+#whether you pass or not is stored in the BAXPFC variable (4 tests, 2 attempts per)
+#if you fail to pass, the time is recorded in the BAXFTC variable
+cantStand = exam[,"BAQ110"] == 1 #give fails to people who can't stand (rare)
+cantStand[is.na(cantStand)] = F
+comb = sprintf("BAXPFC1%d",1:2)
+exam[,"BAXPFC1"] = as.integer(apply(exam[,comb] == 2,1,mean,na.rm=T)) #take mean since it's binary
+exam[logi,"BAXPFC1"] = 1
+comb = sprintf("BAXPFC2%d",1:2)
+exam[,"BAXPFC2"] = as.integer(apply(exam[,comb] == 2,1,mean,na.rm=T)) #take mean since it's binary
+exam[logi,"BAXPFC2"] = 1
+comb = sprintf("BAXPFC3%d",1:2)
+exam[,"BAXPFC3"] = as.integer(apply(exam[,comb] == 2,1,mean,na.rm=T)) #take mean since it's binary
+exam[logi,"BAXPFC3"] = 1
+comb = sprintf("BAXPFC4%d",1:2)
+exam[,"BAXPFC4"] = as.integer(apply(exam[,comb] == 2,1,mean,na.rm=T)) #take mean since it's binary
+exam[logi,"BAXPFC4"] = 1
+
+#fitness measures
+  #only young people measured
+#seems complicated, skipping for now
+
+#obesity cuts:
+exam[,"underweight"] = NA
+logi = exam[,"BMXBMI"] <= 18.5
+logi[is.na(logi)] = F
+exam[logi,"underweight"] = 1
+logi = exam[,"BMXBMI"] > 18.5
+logi[is.na(logi)] = F
+exam[logi,"underweight"] = 0
+
+exam[,"obese"] = NA
+logi = exam[,"BMXBMI"] <= 30
+logi[is.na(logi)] = F
+exam[logi,"obese"] = 0
+logi = exam[,"BMXBMI"] > 30
+logi[is.na(logi)] = F
+exam[logi,"obese"] = 1
+
+exam[,"obese2"] = NA
+logi = exam[,"BMXBMI"] <= 40
+logi[is.na(logi)] = F
+exam[logi,"obese2"] = 0
+logi = exam[,"BMXBMI"] > 40
+logi[is.na(logi)] = F
+exam[logi,"obese2"] = 1
+```
+
+```{r}
+#MGDCGSZ is "Combined grip strength (kg): the sum of the largest reading from each hand."
+examVars = c(pulse="pulse",dibp="BPXDI",sybp="BPXSY",gait="MSXW20TM",grip="MGDCGSZ",
+             bmi="BMXBMI",underweight="underweight",obese="obese",v_obese="obese2",
+             balance1="BAXPFC1",balance2="BAXPFC2",balance3="BAXPFC3",balance4="BAXPFC4" #balance 4 is about 50% success, balance 1 is close to 100%
+             )
+
+#add new ones to exam codex
+examcodex[(examVars),] = NA
+for (j in 1:length(examVars))
+{
+  examcodex[(examVars)[j],] = NA
+  examcodex[(examVars)[j],"Variable.Name"] = examVars[j]
+  examcodex[(examVars)[j],"Variable.Description"] = names(examVars)[j]
+}
+
+examcodex[,"class"] = examcodex[,"Data.File.Description"]
+
+examcodex["pulse","class"] = "heart"
+examcodex["BPXDI","class"] = "heart"
+examcodex["BPXSY","class"] = "heart"
+examcodex["MSXW20TM","class"] = "physical"
+examcodex["MGDCGSZ","class"] = "physical"
+examcodex["BMXBMI","class"] = "weight"
+examcodex["underweight","class"] = "weight"
+examcodex["obese","class"] = "weight"
+examcodex["obese2","class"] = "weight"
+examcodex["BAXPFC1","class"]     = "physical"
+examcodex["BAXPFC2","class"]     = "physical"
+examcodex["BAXPFC3","class"]     = "physical"
+examcodex["BAXPFC4","class"]     = "physical"
+
+examcodex["pulse","type"] = "binary"
+examcodex["BPXDI","type"] = "numeric"
+examcodex["BPXSY","type"] = "numeric"
+examcodex["MSXW20TM","type"] = "numeric"
+examcodex["MGDCGSZ","type"] = "numeric"
+examcodex["BMXBMI","type"] = "numeric"
+examcodex["underweight","type"] = "binary"
+examcodex["obese","type"] = "binary"
+examcodex["obese2","type"] = "binary"
+examcodex["BAXPFC1","type"]     = "binary"
+examcodex["BAXPFC2","type"]     = "binary"
+examcodex["BAXPFC3","type"]     = "binary"
+examcodex["BAXPFC4","type"]     = "binary"
+```
+
+#demographics
+```{r}
+#clean up race
+#1: mexican, 2: other hispanic, 3: non-hispanic white, 4: black
+demo[,"hispanic"] = as.integer( demo[,"RIDRETH1"] == 1 | demo[,"RIDRETH1"] == 2 )
+demo[,"white"]    = as.integer( demo[,"RIDRETH1"] == 3 )
+demo[,"black"]    = as.integer( demo[,"RIDRETH1"] == 4 )
+
+#clean up income - Ratio of family income to poverty
+demo[,"INDFMPIR"] = demo[,"INDFMPIR"]/5
+
+#clean up sex
+demo[,"sex"] = demo[,"RIAGENDR"] - 1
+
+#fix marriage
+demo[,"partner"] = NA
+logi = demo[,"DMDMARTZ"] == 1 #married/living with partner
+logi[is.na(logi)] = F
+demo[logi,"partner"] = 1
+logi = demo[,"DMDMARTZ"] == 2 #separated
+logi[is.na(logi)] = F
+demo[logi,"partner"] = 0
+logi = demo[,"DMDMARTZ"] == 3 #never married
+logi[is.na(logi)] = F
+demo[logi,"partner"] = 0
+```
+
+survival
+```{r}
+#mort = read.csv("C:/data/nhanes/mortality_data.csv") #this is only old survival
+#mort = read.csv("C:/data/nhanes/nhanes0102.csv") #same as prev
+#mort = read.csv("C:/Users/Glen/OneDrive - Dalhousie University/analysis/missing_data/nhanes03040506.csv")
+mort = read.csv("C:/data/nhanes/nhanes_mortality_all_years.csv")
+rownames(mort) = mort[,"SEQN"]
+#table(demo[!is.na(datapp[,"status"]),"SDDSRVYR"]) 
+  # 5    8    9  #mortality_data.csv = nhanes0102.csv
+  #4541 4111  430 
+  #4    5    7    8   12 #nhanes03040506.csv
+  #4746 3252 4000 3998  456 
+  # 1     2     3     4     5     7     8     9    10    12    66  #nhanes_mortality_all_years.csv
+  #6742 11007 10105 10337 10132  7746 10155  9955  9231   479 11236 
+
+#mortality data
+demo[,"stop"] = NA
+demo[,"status"] = NA
+pts = intersect(rownames(mort),rownames(demo))
+demo[pts,"years_remaining"] = mort[pts,"years_remaining"]
+demo[pts,"stop"] = demo[pts,"years_remaining"] + demo[pts,"RIDAGEYR"] 
+demo[pts,"status"] = mort[pts,"status"]
+
+s = Surv(demo[,"RIDAGEYR"],demo[,"stop"],demo[,"status"])
+```
+
+```{r}
+addSurvival=T
+dcuts = c(5,10,20)
+survVar = sprintf("die_within_%.0fyear",dcuts)
+names(survVar)=survVar
+if(addSurvival)#add survival
+{
+  
+
+  for (j in 1:length(dcuts))
+  {
+      demo[,survVar[j]] = NA
+      #definite deaths:
+      logi = demo[,"years_remaining"] <= dcuts[j] & demo[,"status"] == 1
+      logi[is.na(logi)] = F
+      demo[,survVar[j]][logi] = 1
+      #definite censors:
+      logi = demo[,"years_remaining"] > dcuts[j]
+      logi[is.na(logi)] = F
+      demo[,survVar[j]][logi] = 0
+      #rest are NAs (default)
+
+      
+  }
+
+  
+  for (j in 1:length(survVar))
+  {
+    democodex[survVar[j],] = NA
+    democodex[survVar[j],"name"] = survVar[j]
+    democodex[survVar[j],"parsed"] = survVar[j]
+    democodex[survVar[j],"class"] = "death"
+    democodex[survVar[j],"type"] = "binary"
+    democodex[survVar[j],"group"] = "demo"  
+  }
+
+  
+}
+```
+
+```{r}
+#income: INDFMINC,INDFMPIR
+#race: RIDRETH1,  #original race variable
+      #RIDRETH2,  #linked variable
+      #RIDRETH3  #updated to include asian
+demoVars = c(age="RIDAGEYR",sex="sex",survey="SDDSRVYR",partner="partner",
+             income="INDFMPIR",
+             years_remaining="years_remaining",death_age="stop",death_status="status",
+             survVar,
+             #race="RIDRETH1",
+             hispanic="hispanic",white="white",black="black"
+             )
+
+#add new ones to exam codex
+democodex[names(demoVars),] = NA
+for (j in 1:length(demoVars))
+{
+  democodex[(demoVars)[j],] = NA
+  democodex[(demoVars)[j],"Variable.Name"] = demoVars[j]
+  democodex[(demoVars)[j],"Variable.Description"] = names(demoVars)[j]
+}
+
+democodex[,"class"] = democodex[,"Data.File.Description"]
+
+democodex["RIDAGEYR","class"] = "age"
+democodex["RIAGENDR","class"] = "sex"
+democodex["SDDSRVYR","class"] = "survey"
+democodex["DMDMARTZ","class"] = "relationship"
+democodex["INDFMPIR","class"] = "income"
+democodex["years_remaining","class"] = "death"
+democodex["stop","class"] = "death"
+democodex["status","class"] = "death"
+#democodex["RIDRETH1","class"] = "race"
+democodex["hispanic","class"] = "race"
+democodex["white","class"]     = "race"
+democodex["black","class"]     = "race"
+
+
+democodex["RIDAGEYR","type"] = "numeric"
+democodex["RIAGENDR","type"] = "binary"
+democodex["SDDSRVYR","class"] = "numeric"
+democodex["DMDMARTZ","type"] = "binary"
+democodex["INDFMPIR","type"] = "numeric"
+democodex["years_remaining","type"] = "numeric"
+democodex["stop","type"] = "numeric"
+democodex["status","type"] = "binary"
+#democodex["RIDRETH1","type"] = "categorical"
+democodex["hispanic","type"] = "binary"
+democodex["white","type"]     = "binary"
+democodex["black","type"]     = "binary"
+
+```
+
+binary data
+```{r}
+file = sprintf("%s/nhanes_clinic/nhanes_clinic_preproc.csv",dataDir)
+clinic = read.csv(file,row.names=1)
+clinicVars = setdiff(colnames(clinic),c("AGE","SEX","SURVEY","parsed")) #not sure how parsed got in there... yikes
+```
+
+auxiliary questionnaire data
+```{r}
+aux = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic_aux_preproc.csv",dataDir),row.names=1)
+auxCode = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic_aux_preproc_code.csv",dataDir),row.names=1)
+auxVars = auxCode[,"name"]
+
+```
+
+#now clean everything up and merge together
+store as binary and continuous
+save codex
+```{r}
+labVars = setdiff(labVars,"age") #just in case it snuck in...
+
+X = demo[,demoVars]
+
+
+pts = intersect(rownames(X),rownames(labpp))
+X[pts,labVars] = labpp[pts,labVars]
+
+pts = intersect(rownames(X),rownames(exam))
+X[pts,examVars] = exam[pts,examVars]
+
+pts = intersect(rownames(X),rownames(clinic))
+X[pts,clinicVars] = clinic[pts,clinicVars]
+
+pts = intersect(rownames(X),rownames(aux))
+X[pts,auxVars] = aux[pts,auxVars]
+
+#must be an adult
+X = subset(X,RIDAGEYR>=20)
+
+#must have at least one clinic variable
+logi = apply(is.na(X[,clinicVars]),1,sum) > 0
+X = X[logi,]
+
+write.csv(X,sprintf("%s/data/nhanes_preproc.csv",outputDir))
+```
+
+```{r}
+remove_parentheses <- function(x) {
+  gsub("\\s*\\([^)]*\\)", "", x)  # Remove parentheses and any content inside
+}
+```
+#save code file
+```{r}
+bcode = read.csv(sprintf("%s/nhanes_clinic/nhanes_clinic_preproc_code.csv",dataDir),row.names=1)
+bcode[,"type"] = "binary"
+bcode["BPQ080","parsed"] = "high cholesterol"
+lcode = labcodex[labVars,]
+lcode[,"class"] = lcode[,"Data.File.Description"]
+lcode[,"parsed"] = lcode[,"Variable.Description"]
+lcode[,"name"] = lcode[,"Variable.Name"]
+lcode = subset(lcode,!is.na(name))
+addMe = setdiff(labVars,rownames(lcode))
+for (j in 1:length(addMe)) 
+{
+  lcode[addMe[j],] = NA
+  lcode[addMe[j],"name"] = addMe[j]
+  lcode[addMe[j],"parsed"] = addMe[j]
+  lcode[addMe[j],"class"] = addMe[j]
+}
+lcode[,"type"] = "numeric"
+#clean up parsed so it's easier to find duplicates
+lcode[,"parsed"] = tolower(lcode[,"parsed"])
+for (i in 1:nrow(lcode))
+{
+  lcode[i,"parsed"] = remove_parentheses(lcode[i,"parsed"])
+}
+#special cases
+lcode["SSSALIGG","parsed"] = "salmonella igg"
+
+dcode = democodex[demoVars,]
+dcode[,"parsed"] = dcode[,"Variable.Description"]
+dcode[,"name"] = dcode[,"Variable.Name"]
+ecode = examcodex[examVars,]
+ecode[,"parsed"] = ecode[,"Variable.Description"]
+ecode[,"name"] = ecode[,"Variable.Name"]
+
+auxCode[,"type"] = "aux"
+
+
+codex = rbind(data.frame(dcode[,c("name","parsed","class","type")],group="demo"),
+              data.frame(ecode[,c("name","parsed","class","type")],group="exam"),
+              data.frame(bcode[,c("name","parsed","class","type")],group="clinic"),
+              data.frame(auxCode[,c("name","parsed","class","type")],group="aux"),
+              data.frame(lcode[,c("name","parsed","class","type")],group="lab")
+              )
+
+write.csv(codex,sprintf("%s/data/nhanes_preproc_codex.csv",outputDir))
+```

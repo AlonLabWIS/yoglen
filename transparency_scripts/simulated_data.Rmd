@@ -1,0 +1,359 @@
+---
+title: "Simulated NHANES data"
+output: html_notebook
+---
+
+Glen Nov 2025
+Use model fits to generate simulated data, for use with GitHub
+
+Notes:
+-means look good (for lab variables and outcomes)
+-sds looks good (for lab variables)
+-correlations are only a rough approximation for reality:
+  -too strong for lab variables
+  -too weak for outcomes
+
+```{r}
+gRootName = "menopause"
+gRootDir = "/home/glen/R/r_scripts"  #where scripts are
+
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+
+
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+#library(RNHANES)
+library(cowplot)
+#library(survPen)
+library(pROC)
+library(ranger)
+library(segmented)
+library(strucchange)
+library(strucchangeRcpp)
+#library(earth) #for mars use nhanes_menopause_mars.Rmd
+
+outputDir = "/home/glen/postdoc/menopause" #analysis directory
+nhanesDir =  "/home/glen/postdoc/nhanes"
+dataDir =  "/home/glen/data/nhanes"
+
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+```
+
+```{r}
+keep_list = read.csv(sprintf("%s/data/variable_keep_list.csv",outputDir),row.names=1)
+keepList = keep_list
+
+systemCodex = read.csv(sprintf("%s/data/system_codex.csv",outputDir),row.names=1)
+rownames(systemCodex)=systemCodex[,"variable"]
+
+
+codex = read.csv(sprintf("%s/data/nhanes_preproc_codex.csv",nhanesDir),row.names=1)
+rownames(codex)=codex[,"name"]
+```
+
+
+```{r}
+#fully imputed data:
+Xmi = readRDS(sprintf("%s/data/nhanes_menopause_preprocessed_imputed_pmm_logreg.boot_females_with_age_of_menopause_v2.rds",outputDir)) #YoGlen
+Xf = Xmi[["data"]]
+
+#add numerical depression score from 0 to 1 #was z-scored
+Xf[,"depression_score_num"] = pmax(0,exp(Xf[,"depression_score"]*0.8954865-2.126833)-0.03703704)
+for (k in 1:length(Xmi[["complete"]]))
+{
+  Xmi[["complete"]][[k]][,"depression_score_num"] = pmax(0,exp(Xmi[["complete"]][[k]][,"depression_score"]*0.8954865-2.126833)-0.03703704)
+}
+```
+
+load cross-validated models
+```{r}
+load=T
+save=T
+file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,"ac") #available case
+
+models = list(splineJump = GAMSplineJump,spline = GAMSpline,pwGAULSS=GAMSplineQuasiPWGAULSS, GAULSS=GAMSplineGAULSS)
+if(file.exists(file) & load)
+{
+  ms=readRDS(file)
+} else
+{
+  stop("use nhanes_menopause_model_selection.Rmd to be up to date")
+}
+```
+
+```{r}
+load=T
+save=T
+opts = "ac"
+modelSet = 2 #1 or 2
+if (modelSet > 1) opts = sprintf("%s_modelSet%02d",opts,modelSet)
+file=sprintf("%s/results/nhanes_menopause_binary_outcome_model_selection_%s.rds",outputDir,opts)
+
+if(file.exists(file) & load)
+{
+  mso=readRDS(file)
+} else
+{
+  stop("use nhanes_menopause_model_selection.Rmd to be up to date")
+}
+```
+
+```{r}
+labVars =  subset(keep_list,group=="labs")[,"variable"]
+names(labVars) = keep_list[labVars,"prettyname"]
+outcomeVars =  subset(keep_list,group%in%c("outcomes","special_outcomes"))[,"variable"]
+names(outcomeVars) = keep_list[outcomeVars,"prettyname"]
+outcomeVars[outcomeVars=="depression_score"] = "depression_score_num" #one name to fix #was z-scored, now 0-1
+vars = c(labVars,outcomeVars)
+
+#drop type
+for (j in 1:length(outcomeVars))
+{
+  Xf[,outcomeVars[j]] = as.numeric(as.character(Xf[,outcomeVars[j]]))
+  for (k in 1:length(Xmi[["complete"]]))  Xmi[["complete"]][[k]][,outcomeVars[j]] = as.numeric(as.character(Xmi[["complete"]][[k]][,outcomeVars[j]]))
+}
+```
+
+estimate correlation structure
+```{r}
+v=vars
+#available case estimate (default)
+C = cor(Xf[,v],use='pairwise.complete')
+#some are NA due to 0 overlapping tests - estimate these using MI data
+Cmi =list()
+N = list() #number of observations
+for (k in 1:length(Xmi[["complete"]]))
+{
+  Cmi[[k]] = cov(Xmi[["complete"]][[k]][,v],use='pairwise.complete')
+  Cmi[[k]][is.na(Cmi[[k]])] = 0 #drop NAs
+  N[[k]] = matrix(0,nrow=length(v),ncol=length(v))
+  #for (i in 1:length(v))
+  #{
+  #  for (j in i:length(v))
+  #  {
+  #    N[[k]][i,j] = sum(!is.na(Xmi[["complete"]][[k]][,v[i]]) & !is.na(Xmi[["complete"]][[k]][,v[j]]))
+  #    N[[k]][j,i] = N[[k]][i,j]
+  #  }
+  #}
+  #weighted Cmi[[k]] by N i.e. make it sqrt(sum()) without N in it
+  #Cmi[[k]] = Cmi[[k]]*sqrt(N[[k]])
+}
+#pool - add and divide by sqrt(N)
+#Rubin's rules for the point estimate is just the mean
+#N = Reduce("+",N) #not needed - no NAs in MI data
+#Cmi = Reduce("+",Cmi)/N
+Cmi = cov2cor(Reduce("+",Cmi))
+
+if(!isTRUE(all.equal(dimnames(Cmi),dimnames(C)))) stop("C and Cmi not aligned")
+C[is.na(C)] = Cmi[is.na(C)] #replace missing correlations with imputed ones
+```
+
+generate data
+-accept-reject so we get only people in trange
+```{r}
+library(Hmisc) #extrapolates
+xout = seq(20-85,85-20,by=1)
+set.seed(123)
+save=T
+load=F
+
+
+nm = "yoglen"
+file=sprintf("%s/data/%s_simulated_nhanes_data_with_outcomes.csv",outputDir,nm)
+
+N    = nrow(Xf)
+
+
+if(file.exists(file) & load)
+{
+  data = read.csv(file)
+} else
+{
+  
+
+  age  = sample(Xf[,"RIDAGEYR"],N,replace=T) #sample extras
+  age_menopause = sample(Xmi[["complete"]][[1]][,"age_menopause"],N,replace=T)
+  t = age - age_menopause
+
+  data = data.frame(id=1:N,age=age,age_menopause=age_menopause,t=age-age_menopause,menopause=1*(age >= age_menopause))
+
+  #sample correlated noise
+    #will scale later using model
+  #noise = mvrnorm(n=N,mu=rep(0,length(vars)),Sigma=C) #gives grief - C not positive deinite
+  #option 1. just ignore correlations (fine for univariate analysis)
+  #noise = mvrnorm(n=N,mu=rep(0,length(vars)),Sigma=diag(1,length(vars))) 
+  #option 2. use the closest positive definite matrix
+  noise = mvrnorm(n=N,mu=rep(0,length(vars)),Sigma=Matrix::nearPD(C, corr=TRUE)$mat)  #looks identical to C to me
+  
+  #####lab outcomes
+  pr   = ms[["bestPr"]]
+  prsd = ms[["bestPrSD"]]
+
+  
+  #####lab variables
+  pr   = ms[["bestPr"]]
+  prsd = ms[["bestPrSD"]]
+  for (j in 1:length(labVars))
+  {
+    approxMean = approxfun(approxExtrap(x=subset(pr,var==labVars[j])[,"x"],y=subset(pr,var==labVars[j])[,"y"],xout=xout))
+    approxSD   = approxfun(approxExtrap(x=subset(prsd,var==labVars[j])[,"x"],y=subset(prsd,var==labVars[j])[,"y"],xout=xout))
+    data[,labVars[j]]  = approxMean(data[,"t"])+noise[,labVars[j]]*approxSD(data[,"t"])
+  }
+
+
+    #####outcomes
+  for (j in 1:length(outcomeVars))
+  {
+    v = outcomeVars[j]
+    size = 1
+    if(v=="depression_score_num")#this is continuous from 0-1
+    {
+      size = 27
+    } 
+    
+    approxMean = approxfun(approxExtrap(x=subset(mso[["bestPr"]],var==v)[,"x"],y=qlogis(subset(mso[["bestPr"]],var==v)[,"y"]),xout=xout))
+    approxSD   = approxfun(approxExtrap(x=subset(mso[["bestPrSD"]],var==v)[,"x"],y=subset(mso[["bestPrSD"]],var==v)[,"y"],xout=xout))
+
+    data[,v]  = rbinom(nrow(data),size=size,prob=pnorm(qnorm(plogis(approxMean(data[,"t"])))*sqrt(1 + approxSD(data[,"t"])^2)+noise[,v]*approxSD(data[,"t"])))/size
+    
+
+  }
+
+  if(save) write.csv(data,file,row.names=F)
+}
+
+```
+
+
+check data
+```{r}
+save=T
+load=T
+useAC=T #use available case data?
+
+opts =  "stats"
+if(useAC) opts = sprintf("%s_ac",opts)
+
+
+filef   = sprintf("%s/results/nhanes_menopause_female_mean_%s.csv",outputDir,opts)
+filefsd = sprintf("%s/results/nhanes_menopause_female_sd_%s.csv",outputDir,opts)
+
+
+if(file.exists(filef) & load)
+{
+  aggf = read.csv(filef)
+  aggfsd = read.csv(filefsd)
+} else
+{
+  stop("agg not found")
+}
+```
+
+```{r}
+g = list()
+temp = data
+
+pr = ms$bestPr
+for (j in 1:length(labVars))
+{
+  temp[,"y"] = data[,labVars[j]]
+  aggf[,"y"] = aggf[,labVars[j]]
+  aggf[,"yse"] = aggf[,sprintf("%sse",labVars[j])]
+  
+  g[[j]] = ggplot(subset(temp,t >= -25 & t <= 25),aes(x=t,y=y))+
+            stat_summary(aes(x=round(t)),colour="grey70")+
+            geom_pointrange(data=aggf,aes(ymin=y-yse,ymax=y+yse),colour="red",size=.1,alpha=.3)+
+            geom_line(data=subset(pr,var==labVars[j]),aes(x=x,y=y),colour="black")+
+            labs(x="Time since menopause (years)",y="y",title=names(labVars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol-length(g))),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=T
+if(save)
+{
+    ggsave(sprintf("%s/results/nhanes_simulated_lab_vars.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```
+```{r}
+g = list()
+temp = data
+
+prsd = ms$bestPrSD
+for (j in 1:length(labVars))
+{
+  temp[,"y"] = data[,labVars[j]]
+  aggf[,"y"] = aggf[,labVars[j]]
+  aggf[,"yse"] = aggf[,sprintf("%sse",labVars[j])]
+  
+  g[[j]] = ggplot(subset(temp,t >= -25 & t <= 25),aes(x=t,y=y))+
+            stat_summary(aes(x=round(t)),colour="grey70",fun=sd)+
+            geom_line(data=subset(prsd,var==labVars[j]),aes(x=x,y=y),colour="black")+
+            labs(x="Time since menopause (years)",y="y",title=names(labVars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol-length(g))),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=T
+if(save)
+{
+    ggsave(sprintf("%s/results/nhanes_simulated_lab_vars_sd.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```
+
+```{r}
+g = list()
+temp = data
+
+pr = mso$bestPr
+for (j in 1:length(outcomeVars))
+{
+  temp[,"y"] = data[,outcomeVars[j]]
+  aggf[,"y"] = aggf[,outcomeVars[j]]
+  aggf[,"yse"] = aggf[,sprintf("%sse",outcomeVars[j])]
+  
+  g[[j]] = ggplot(subset(temp,t >= -25 & t <= 25),aes(x=t,y=y))+
+            stat_summary(aes(x=round(t)),colour="grey70")+
+            geom_pointrange(data=aggf,aes(ymin=y-yse,ymax=y+yse),colour="red",size=.1,alpha=.3)+
+            geom_line(data=subset(pr,var==outcomeVars[j]),aes(x=x,y=y),colour="black")+
+            labs(x="Time since menopause (years)",y="y",title=names(outcomeVars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol-length(g))),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=T
+if(save)
+{
+    ggsave(sprintf("%s/results/nhanes_simulated_outcomes.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```

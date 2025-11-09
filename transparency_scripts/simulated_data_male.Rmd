@@ -1,0 +1,231 @@
+---
+title: "Simulated NHANES data - males"
+output: html_notebook
+---
+
+Glen Nov 2025
+Males by age, use GAULSS
+
+Notes:
+
+```{r}
+gRootName = "menopause"
+gRootDir = "/home/glen/R/r_scripts"  #where scripts are
+
+#source(sprintf("%s/logreg.R",gRootDir),verbose=0) 
+#source(sprintf("%s/pca.R",gRootDir),verbose=0)  #cov2
+source(sprintf("%s/main.R",gRootDir),verbose=0)
+source(sprintf("%s/plots.R",gRootDir),verbose=0) #TilePlot
+source(sprintf("%s/survival.R",gRootDir),verbose=0) #ArrayToStartStop
+#source(sprintf("%s/sf.R",gRootDir),verbose=0) 
+
+
+
+library(tidyr) #for spread (long to wide) and gather (wide to long) #http://www.cookbook-r.com/Manipulating_data/Converting_data_between_wide_and_long_format/
+library(GGally)
+library(gridExtra)
+library(ggrepel)
+library(survival)
+#library(RNHANES)
+library(cowplot)
+#library(survPen)
+library(pROC)
+library(ranger)
+library(segmented)
+library(strucchange)
+library(strucchangeRcpp)
+#library(earth) #for mars use nhanes_menopause_mars.Rmd
+
+outputDir = "/home/glen/postdoc/menopause" #analysis directory
+nhanesDir =  "/home/glen/postdoc/nhanes"
+dataDir =  "/home/glen/data/nhanes"
+
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+```
+
+```{r}
+keep_list = read.csv(sprintf("%s/data/variable_keep_list.csv",outputDir),row.names=1)
+keepList = keep_list
+
+systemCodex = read.csv(sprintf("%s/data/system_codex.csv",outputDir),row.names=1)
+rownames(systemCodex)=systemCodex[,"variable"]
+
+
+codex = read.csv(sprintf("%s/data/nhanes_preproc_codex.csv",nhanesDir),row.names=1)
+rownames(codex)=codex[,"name"]
+```
+
+
+```{r}
+#fully imputed data:
+Xmmi = readRDS(sprintf("%s/data/nhanes_menopause_preprocessed_imputed_pmm_logreg.boot_males_with_age_of_menopause_v3.rds",outputDir)) #YoGlen
+Xm = Xmmi[["data"]]
+
+```
+
+
+```{r}
+labVars =  subset(keep_list,group=="labs")[,"variable"]
+names(labVars) = keep_list[labVars,"prettyname"]
+
+vars = c(labVars)
+
+```
+
+estimate correlation structure
+```{r}
+v=vars
+#available case estimate (default)
+C = cor(Xm[,v],use='pairwise.complete')
+#some are NA due to 0 overlapping tests - estimate these using MI data
+Cmi =list()
+N = list() #number of observations
+for (k in 1:length(Xmmi[["complete"]]))
+{
+  Cmi[[k]] = cov(Xmmi[["complete"]][[k]][,v],use='pairwise.complete')
+  Cmi[[k]][is.na(Cmi[[k]])] = 0 #drop NAs
+  N[[k]] = matrix(0,nrow=length(v),ncol=length(v))
+  #for (i in 1:length(v))
+  #{
+  #  for (j in i:length(v))
+  #  {
+  #    N[[k]][i,j] = sum(!is.na(Xmmi[["complete"]][[k]][,v[i]]) & !is.na(Xmmi[["complete"]][[k]][,v[j]]))
+  #    N[[k]][j,i] = N[[k]][i,j]
+  #  }
+  #}
+  #weighted Cmi[[k]] by N i.e. make it sqrt(sum()) without N in it
+  #Cmi[[k]] = Cmi[[k]]*sqrt(N[[k]])
+}
+#pool - add and divide by sqrt(N)
+#Rubin's rules for the point estimate is just the mean
+#N = Reduce("+",N) #not needed - no NAs in MI data
+#Cmi = Reduce("+",Cmi)/N
+Cmi = cov2cor(Reduce("+",Cmi))
+
+if(!isTRUE(all.equal(dimnames(Cmi),dimnames(C)))) stop("C and Cmi not aligned")
+C[is.na(C)] = Cmi[is.na(C)] #replace missing correlations with imputed ones
+```
+
+generate data
+-accept-reject so we get only people in trange
+```{r}
+library(Hmisc) #extrapolates
+xout = seq(20-85,85-20,by=1)
+set.seed(123)
+save=T
+load=F
+
+
+file=sprintf("%s/data/simulated_nhanes_male.csv",outputDir)
+
+N    = nrow(Xm)
+
+
+if(file.exists(file) & load)
+{
+  data = read.csv(file)
+} else
+{
+  temp = Xm
+
+  age  = sample(Xm[,"RIDAGEYR"],N,replace=T) #sample extras
+
+  data = data.frame(id=1:N,age=age,RIDAGEYR=age)
+
+  #sample correlated noise
+    #will scale later using model
+  #noise = mvrnorm(n=N,mu=rep(0,length(vars)),Sigma=C) #gives grief - C not positive deinite
+  #option 1. just ignore correlations (fine for univariate analysis)
+  #noise = mvrnorm(n=N,mu=rep(0,length(vars)),Sigma=diag(1,length(vars))) 
+  #option 2. use the closest positive definite matrix
+  noise = mvrnorm(n=N,mu=rep(0,length(vars)),Sigma=Matrix::nearPD(C, corr=TRUE)$mat)  #looks identical to C to me
+  
+  #####lab outcomes
+  pr   = ms[["bestPr"]]
+  prsd = ms[["bestPrSD"]]
+
+  
+  #####lab variables
+  for (j in 1:length(labVars))
+  {
+    temp[,"y"] = Xm[,labVars[j]]
+    
+    fit = gam(list(y~s(RIDAGEYR,k=20),~s(RIDAGEYR)),data=temp,family=gaulss(),method="REML")
+    
+    pr = predict(fit,data)
+    
+    data[,labVars[j]]  = pr[,1]+noise[,labVars[j]]*(0.01+exp(pr[,2]))
+  }
+
+  if(save) write.csv(data,file,row.names=F)
+}
+
+```
+
+
+check fit
+```{r}
+g = list()
+temp = data
+
+pr = ms$bestPr
+for (j in 1:length(labVars))
+{
+  temp[,"y"] = data[,labVars[j]]
+  Xm[,"y"] = Xm[,labVars[j]]
+
+  g[[j]] = ggplot(subset(temp,age >= 25 & age <= 75),aes(x=t,y=y))+
+            stat_summary(aes(x=round(age)),colour="black")+
+            stat_summary(data=Xm,aes(x=round(RIDAGEYR)),colour="red")+
+            labs(x="Age (years)",y="y",title=names(labVars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol-length(g))),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=T
+if(save)
+{
+    ggsave(sprintf("%s/results/nhanes_male_simulated_lab_vars.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```
+
+```{r}
+g = list()
+temp = data
+
+prsd = ms$bestPrSD
+for (j in 1:length(labVars))
+{
+  temp[,"y"] = data[,labVars[j]]
+
+  Xm[,"y"] = Xm[,labVars[j]]
+
+  g[[j]] = ggplot(subset(temp,age >= 25 & age <= 75),aes(x=t,y=y))+
+            stat_summary(aes(x=round(age)),colour="black",fun=sd)+
+            stat_summary(data=Xm,aes(x=round(RIDAGEYR)),colour="red",fun=sd)+
+            labs(x="Age (years)",y="sd",title=names(labVars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol-length(g))),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=T
+if(save)
+{
+    ggsave(sprintf("%s/results/nhanes_simulated_male_lab_vars_sd.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```
+

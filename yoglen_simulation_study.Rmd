@@ -1,0 +1,592 @@
+---
+title: "YoGlen study"
+output: html_notebook
+---
+
+Glen Oct 2025
+Generate realistic data then check that YoGlen properly reconstructs GT
+
+Model choices:
+1. combined (combined models, averages over jumps) #easy
+2. GAULSS (good model, expressly forbids jumps)
+3. best (picks one model, sometimes jumps and sometimes not)
+
+
+```{r}
+gRootName = "yoglen"
+
+outputDir = "/home/glen/postdoc/yoglen" #analysis directory
+
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+library(ggplot2)
+```
+
+```{r}
+keep_list = read.csv(sprintf("%s/data/variable_keep_list.csv",outputDir),row.names=1)
+keepList = keep_list
+
+systemCodex = read.csv(sprintf("%s/data/system_codex.csv",outputDir),row.names=1)
+rownames(systemCodex)=systemCodex[,"variable"]
+
+
+codex = read.csv(sprintf("%s/data/nhanes_preproc_codex.csv",outputDir),row.names=1)
+rownames(codex)=codex[,"name"]
+```
+
+
+```{r}
+dataFile = sprintf("%s/data/nhanes_data.csv",outputDir)
+useSim=F
+if(file.exists(dataFile)) #real data
+{
+    print("real data found")
+  Xf = read.csv(dataFile,row.names=1) #real data
+  Xmi = readRDS(sprintf("%s/data/nhanes_data_mi.rds",outputDir)) #real data
+} else #sim data
+{
+  print("real data not found, using simulated...")
+  useSim =  T
+  Xf = read.csv(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes.csv",outputDir),row.names=1) 
+  Xmi = readRDS(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes_mi.rds",outputDir))
+  
+  Xf[,"RIDAGEYR"] = Xf[,"age"] #I named it differently in the simulated data
+  for (k in 1:length(Xmi)) Xmi[[k]][,"RIDAGEYR"] = Xmi[[k]][,"age"]
+}
+```
+
+load cross-validated models
+```{r}
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+load=T
+save=T
+file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,"ac") #available case
+#file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,"mi")  #imputed
+
+models = list(splineJump = GAMSplineJump,spline = GAMSpline,pwGAULSS=GAMSplineQuasiPWGAULSS, GAULSS=GAMSplineGAULSS)
+if(file.exists(file) & load)
+{
+  ms=readRDS(file)
+} else
+{
+  stop("use nhanes_menopause_model_selection.Rmd to be up to date")
+}
+```
+load correlation structure
+```{r}
+save=T
+load=T
+scaleBySD=TRUE #divide by estimated sd ? I think you should...
+useAC=F #use available case data for lab tests? #will have NAs if you do
+
+pr   = ms[["bestPr"]]
+prsd = ms[["bestPrSD"]]
+
+opts = sprintf("cov_combined_best")
+if(scaleBySD) opts = sprintf("%s_scaleBySD",opts)
+if(useAC) opts = sprintf("%s_ac",opts)
+
+file = sprintf("%s/data/overall_covariance_%s.rds",outputDir,opts)
+
+if(file.exists(file) & load)
+{
+  C = readRDS(file)
+} else
+{
+  stop("not found - computed in menopause_final_plots.Rmd")
+}
+```
+
+generate data
+-accept-reject so we get only people in trange
+```{r}
+set.seed(123)
+save=T
+load=T
+trange= c(-25,25) #window for accept-reject
+#acceptReject=TRUE #if true then distribution will be constrained but unrealistic
+acceptReject=FALSE
+
+nm = "yoglen"
+if(acceptReject) nm = sprintf("%s_acceptReject",nm)
+file=sprintf("%s/data/%s_simulated_nhanes_data.csv",outputDir,nm)
+
+N    = nrow(Xf)
+vars = subset(keep_list,group=="labs")[,"variable"]
+systems = systemCodex[vars,"primary"]
+vars = vars[order(systems,vars)]
+names(vars) = keep_list[vars,"prettyname"]
+
+
+if(file.exists(file) & load)
+{
+  data = read.csv(file)
+} else
+{
+  
+
+  maxIter = 100
+  for (i in 1:maxIter)
+  {
+    age  = sample(Xf[,"RIDAGEYR"],2*N,replace=T) #sample extras
+    age_menopause = sample(Xmi[["complete"]][[1]][,"age_menopause"],2*N,replace=T)
+    t = age - age_menopause
+    if(acceptReject)
+    {
+      logi = t[1] > trange[1] & t <= trange[2]
+      age = age[logi]
+      age_menopause = age_menopause[logi]
+    }
+
+    if(length(age) > N)
+    {
+      age = age[1:N]
+      age_menopause = age_menopause[1:N]
+      break
+    }
+  }
+  if(i==maxIter) stop("max iters reached, failed to converge try again or increase trange")
+  
+  pr   = ms[["bestPr"]]
+  prsd = ms[["bestPrSD"]]
+
+  data = data.frame(id=1:N,age=age,age_menopause=age_menopause,t=age-age_menopause,menopause=1*(age >= age_menopause))
+
+  #sample correled noise
+  noise = mvrnorm(n=N,mu=rep(0,length(vars)),Sigma=C[[1]])
+  
+  #gen variables
+  library(Hmisc) #extrapolates
+  xout = seq(20-85,85-20,by=1)
+  for (j in 1:length(vars))
+  {
+    #approxMean = approxfun(x=subset(pr,var==vars[j])[,"x"],y=subset(pr,var==vars[j])[,"y"],yleft=NA,yright=NA)
+    #approxSD = approxfun(x=subset(prsd,var==vars[j])[,"x"],y=subset(prsd,var==vars[j])[,"y"],yleft=NA,yright=NA)
+    approxMean = approxfun(approxExtrap(x=subset(pr,var==vars[j])[,"x"],y=subset(pr,var==vars[j])[,"y"],xout=xout))
+    approxSD   = approxfun(approxExtrap(x=subset(prsd,var==vars[j])[,"x"],y=subset(prsd,var==vars[j])[,"y"],xout=xout))
+    data[,vars[j]]  = approxMean(data[,"t"])+noise[,vars[j]]*approxSD(data[,"t"])
+  }
+
+  #trim data to valid region: (only know mean here; should cut off same as Xf roughly so no need to tweak N)
+  #data = subset(data,t >= -25 & t <= 25)
+
+  #noisy menopause ages
+  data[,"biased_age_menopause"] = data[,"age_menopause"]+4 
+  data[,"noisy_age_menopause"] = data[,"age_menopause"]+rnorm(nrow(data),0,4) 
+
+  if(save) write.csv(data,file,row.names=F)
+}
+
+#in case you loaded, set seed again
+set.seed(432)
+
+
+```
+
+
+check data
+```{r}
+save=T
+load=T
+useAC=T #use available case data?
+
+opts =  "stats"
+if(useAC) opts = sprintf("%s_ac",opts)
+
+
+filef   = sprintf("%s/results/nhanes_menopause_female_mean_%s.csv",outputDir,opts)
+filefsd = sprintf("%s/results/nhanes_menopause_female_sd_%s.csv",outputDir,opts)
+
+
+if(file.exists(filef) & load)
+{
+  aggf = read.csv(filef)
+  aggfsd = read.csv(filefsd)
+} else
+{
+  stop("agg not found")
+}
+```
+
+```{r}
+g = list()
+temp = data
+
+for (j in 1:length(vars))
+{
+  temp[,"y"] = data[,vars[j]]
+  aggf[,"y"] = aggf[,vars[j]]
+  aggf[,"yse"] = aggf[,sprintf("%sse",vars[j])]
+  
+  g[[j]] = ggplot(temp,aes(x=t,y=y))+
+            stat_summary(aes(x=round(t)),colour="grey70")+
+            geom_pointrange(data=aggf,aes(ymin=y-yse,ymax=y+yse),colour="red",size=.1,alpha=.3)+
+            geom_line(data=subset(pr,var==vars[j]),aes(x=x,y=y),colour="black")+
+            labs(x="Time since menopause (years)",y="y",title=names(vars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol-length(g))),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=F
+if(save)
+{
+    ggsave(sprintf("%s/results/yoglen_sim_simulation_study_data.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```
+
+#now hide info and check reconstruction ability
+```{r}
+am = data[,"age_menopause"]
+am[data[,"menopause"]==0] = NA #hide all pre-menopause ages
+meno = data[,"menopause"]
+t=am
+t[data[,"menopause"]==0] = data[data[,"menopause"]==0,"age"]  
+smeno=Surv(t,data[,"menopause"])
+
+mdata = data.frame(RIDAGEYR=data[,"age"],menopause=meno,age_menopause=am)
+mdata[,vars]= data[,vars]
+fit0 = FitLatentFun(data=mdata,vars=NULL,ref_age=rep(NA,nrow(smeno)),ref_status=smeno[,2],ref_age_menopause=smeno[,1],iterativeSurvFit=F,nboot=1,menopause_ages = seq(18, 70, by = 1),
+                  FitFun = WeightedPiecewiseLM,VarInFit=F,f=y~t)
+```
+
+biased data
+```{r}
+am = data[,"biased_age_menopause"]
+am[data[,"menopause"]==0] = NA #hide all pre-menopause ages
+meno = data[,"menopause"]
+t=am
+t[data[,"menopause"]==0] = data[data[,"menopause"]==0,"age"]  
+smeno=Surv(t,data[,"menopause"])
+
+fitb = FitLatentFun(data=data.frame(RIDAGEYR=data[,"age"],menopause=meno,age_menopause=am),vars=NULL,ref_age=rep(NA,nrow(smeno)),ref_status=smeno[,2],ref_age_menopause=smeno[,1],iterativeSurvFit=F,nboot=1,menopause_ages = seq(18, 70, by = 1),
+                  FitFun = WeightedPiecewiseLM,VarInFit=F,f=y~t)
+```
+
+noisy data
+```{r}
+am = data[,"noisy_age_menopause"]
+am[data[,"menopause"]==0] = NA #hide all pre-menopause ages
+meno = data[,"menopause"]
+t=am
+t[data[,"menopause"]==0] = data[data[,"menopause"]==0,"age"]  
+smeno=Surv(t,data[,"menopause"])
+
+fitn = FitLatentFun(data=data.frame(RIDAGEYR=data[,"age"],menopause=meno,age_menopause=am),vars=NULL,ref_age=rep(NA,nrow(smeno)),ref_status=smeno[,2],ref_age_menopause=smeno[,1],iterativeSurvFit=F,nboot=1,menopause_ages = seq(18, 70, by = 1),
+                  FitFun = WeightedPiecewiseLM,VarInFit=F,f=y~t)
+```
+
+```{r}
+#now impute & aggregate
+
+mi    = list()
+
+M = 15
+for (j in 1:M)
+{
+  mi[[j]] = mdata
+}
+
+save=T
+load=T
+file=sprintf("%s/results/yoglen_simulation_study_mi.rds",outputDir)
+if(file.exists(file) & load)
+{
+  mi=readRDS(file)
+} else
+{
+  for (i in 1:nrow(mdata)) 
+  {
+    #cat(".")
+    t = sample(fit0$control$menopause_ages,size=M,replace=T,prob=fit0$pzy[i,])
+    for (j in 1:M) mi[[j]][i,"age_menopause_imp"] = t[j]
+    rm(t)
+    t = sample(fitb$control$menopause_ages,size=M,replace=T,prob=fitb$pzy[i,])
+    for (j in 1:M) mi[[j]][i,"age_menopause_bias_imp"] = t[j]
+    rm(t)
+    t = sample(fitn$control$menopause_ages,size=M,replace=T,prob=fitn$pzy[i,])
+    for (j in 1:M) mi[[j]][i,"age_menopause_noise_imp"] = t[j]
+    rm(t)
+  }
+  if(save) saveRDS(mi,file)
+}
+
+```
+
+
+```{r}
+tcuts = seq(-25,25,by=1)
+agg0   = list()
+agg0se = list()
+aggb   = list()
+aggbse = list()
+aggn   = list()
+aggnse = list()
+for (j in 1:M)
+{
+  mi[[j]][,"t"]    = mi[[j]][,"RIDAGEYR"] - mi[[j]][,"age_menopause_imp"]
+  mi[[j]][,"tcut"] = cut(mi[[j]][,"t"],tcuts,include.lowest=T)
+  agg0[[j]]   = as.matrix(aggregate(mi[[j]][,c("t",vars)],by=mi[[j]][,"tcut",drop=F],mean,na.rm=T,drop=F)[,c("t",vars)])
+  agg0se[[j]] = as.matrix(aggregate(mi[[j]][,c("t",vars)],by=mi[[j]][,"tcut",drop=F],SEM,na.rm=T,drop=F)[,c("t",vars)])
+
+  mi[[j]][,"t"]    = mi[[j]][,"RIDAGEYR"] - mi[[j]][,"age_menopause_bias_imp"]
+  mi[[j]][,"tcut"] = cut(mi[[j]][,"t"],tcuts,include.lowest=T)
+  aggb[[j]]   = as.matrix(aggregate(mi[[j]][,c("t",vars)],by=mi[[j]][,"tcut",drop=F],mean,na.rm=T,drop=F)[,c("t",vars)])
+  aggbse[[j]] = as.matrix(aggregate(mi[[j]][,c("t",vars)],by=mi[[j]][,"tcut",drop=F],SEM,na.rm=T,drop=F)[,c("t",vars)])
+  
+  mi[[j]][,"t"]    = mi[[j]][,"RIDAGEYR"] - mi[[j]][,"age_menopause_noise_imp"]
+  mi[[j]][,"tcut"] = cut(mi[[j]][,"t"],tcuts,include.lowest=T)
+  aggn[[j]]   = as.matrix(aggregate(mi[[j]][,c("t",vars)],by=mi[[j]][,"tcut",drop=F],mean,na.rm=T,drop=F)[,c("t",vars)])
+  aggnse[[j]] = as.matrix(aggregate(mi[[j]][,c("t",vars)],by=mi[[j]][,"tcut",drop=F],SEM,na.rm=T,drop=F)[,c("t",vars)])
+  
+}
+r = RubinMat(agg0,lse = agg0se,na.rm=T)
+agg0 = as.data.frame(r[[1]])
+agg0[,sprintf("%sse",colnames(r[[2]]))] = r[[2]]
+r = RubinMat(aggb,lse = aggbse,na.rm=T)
+aggb = as.data.frame(r[[1]])
+aggb[,sprintf("%sse",colnames(r[[2]]))] = r[[2]]
+r = RubinMat(aggn,lse = aggnse,na.rm=T)
+aggn = as.data.frame(r[[1]])
+aggn[,sprintf("%sse",colnames(r[[2]]))] = r[[2]]
+```
+
+```{r}
+g = list()
+temp = data
+
+for (j in 1:length(vars))
+{
+  agg0[,"y"] = agg0[,vars[j]]
+  agg0[,"yse"] = agg0[,sprintf("%sse",vars[j])]
+  
+  g[[j]] = ggplot(agg0,aes(x=t,y=y,ymin=y-yse,ymax=y+yse))+
+            geom_pointrange(size=.25)+
+            geom_line(data=subset(pr,var==vars[j]),aes(x=x,y=y),colour="blue")+
+            labs(x="Time since menopause (years)",y="y",title=names(vars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol)),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=F
+if(save)
+{
+    ggsave(sprintf("%s/results/yoglen_sim_simulation_study_data_aggfit.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```
+
+```{r}
+g = list()
+temp = data
+
+for (j in 1:length(vars))
+{
+  aggb[,"y"] = aggb[,vars[j]]
+  aggb[,"yse"] = aggb[,sprintf("%sse",vars[j])]
+  
+  g[[j]] = ggplot(aggb,aes(x=t,y=y,ymin=y-yse,ymax=y+yse))+
+            geom_pointrange(size=.25)+
+            geom_line(data=subset(pr,var==vars[j]),aes(x=x,y=y),colour="blue")+
+            labs(x="Time since menopause (years)",y="y",title=names(vars)[j])+#,title=sprintf("y%02d",j))+
+            theme_minimal(base_size=8)+
+            theme(axis.title.y=element_text(angle=0,vjust=.55))
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol)),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=F
+if(save)
+{
+    ggsave(sprintf("%s/results/yoglen_sim_simulation_study_data_bias_aggfit.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
+}
+```
+
+model selection
+```{r}
+load=T
+save=T
+models = list(splineJump = GAMSplineJump,spline = GAMSpline,pwGAULSS=GAMSplineQuasiPWGAULSS, GAULSS=GAMSplineGAULSS)
+mc.cores=5
+Nfolds=10
+Nrepeats=1
+
+for (j in 1:length(mi))
+{
+  mi[[j]][,"menopause"] = data[,"menopause"]
+    
+  mi[[j]][,"t0"]    = mi[[j]][,"RIDAGEYR"] - data[,"age_menopause"]
+  mi[[j]][,"ti"]    = mi[[j]][,"RIDAGEYR"] - mi[[j]][,"age_menopause_imp"]
+  mi[[j]][,"tb"]    = mi[[j]][,"RIDAGEYR"] - mi[[j]][,"age_menopause_bias_imp"]
+  mi[[j]][,"tn"]    = mi[[j]][,"RIDAGEYR"] - mi[[j]][,"age_menopause_noise_imp"]
+}
+
+
+
+file=sprintf("%s/results/yoglen0_simulation_study.rds",outputDir)
+if(file.exists(file) & load)
+{
+  ms0=readRDS(file)
+} else
+{
+  print(Sys.time())
+  ms0 = ModelSelectionMI(mi,vars=vars,xcol="ti",models=models,Nfolds=Nfolds,Nrepeats=Nrepeats,xdelta=c(.01,1,2,3,4,5,10),refModels = 1:length(models),mc.cores=mc.cores)
+  print(Sys.time())
+  if(save) 
+  {
+    saveRDS(ms0,file)
+  }
+}
+```
+without imputation... (as baseline for model power)
+still need at least 2 elements in the list for the code to function
+```{r}
+file=sprintf("%s/results/yoglen_simulation_study_noimp.rds",outputDir)
+if(file.exists(file) & load)
+{
+  msno=readRDS(file)
+} else
+{
+  print(Sys.time())
+  msno = ModelSelectionMI(mi[1:2],vars=vars,xcol="t0",models=models,Nfolds=Nfolds,Nrepeats=Nrepeats,xdelta=c(.01,1,2,3,4,5,10),refModels = 1:length(models),mc.cores=2)
+  print(Sys.time())
+  if(save) 
+  {
+    saveRDS(msno,file)
+  }
+}
+```
+
+```{r}
+file=sprintf("%s/results/yoglen_bias_simulation_study.rds",outputDir)
+if(file.exists(file) & load)
+{
+  msb=readRDS(file)
+} else
+{
+  msb = ModelSelectionMI(mi,vars=vars,xcol="tb",models=models,Nfolds=Nfolds,Nrepeats=Nrepeats,xdelta=c(.01,1,2,3,4,5,10),refModels = 1:length(models),mc.cores=mc.cores)
+  if(save) 
+  {
+    saveRDS(msb,file)
+  }
+}
+```
+
+```{r}
+file=sprintf("%s/results/yoglen_noise_simulation_study.rds",outputDir)
+if(file.exists(file) & load)
+{
+  msn=readRDS(file)
+} else
+{
+  msn = ModelSelectionMI(mi,vars=vars,xcol="tn",models=models,Nfolds=Nfolds,Nrepeats=Nrepeats,xdelta=c(.01,1,2,3,4,5,10),refModels = 1:length(models),mc.cores=mc.cores)
+  if(save) 
+  {
+    saveRDS(msn,file)
+  }
+}
+```
+
+```{r}
+g = list()
+temp = data
+
+cols = c("black",RColorBrewer::brewer.pal(2, "Dark2"))
+names(cols) = c("correct distribution","biased","excess noise")
+linetypes = c(1:3)
+names(linetypes) = c("correct distribution","biased","excess noise")
+for (j in 1:length(vars))
+{
+  temp[,"y"] = data[,vars[j]]
+  msPr = list()
+  msPr[[1]] = subset(ms0$bestPr,var==vars[j])
+  msPr[[1]][,"distribution"] = "correct distribution"
+  msPr[[2]] = subset(msb$bestPr,var==vars[j])
+  msPr[[2]][,"distribution"] = "biased"
+  msPr[[3]] = subset(msn$bestPr,var==vars[j])
+  msPr[[3]][,"distribution"] = "excess noise"
+  #msPr[[4]] = subset(msno$bestPr,var==vars[j])
+  #msPr[[4]][,"distribution"] = "t is known"
+  for (i in 1:length(msPr)) msPr[[i]] = msPr[[i]][,c("x","y","yse","distribution")]
+  msPr = do.call(rbind,msPr)
+  
+  g[[j]] = ggplot(msPr,aes(x=x,y=y,colour=distribution,fill=distribution,linetype=distribution))+
+            geom_vline(xintercept=0,size=1,colour="grey75")+
+            stat_summary(data=temp,aes(x=round(t),y=y),colour="grey70",size=.1,inherit.aes=F)+
+            geom_line()+
+            geom_ribbon(aes(ymin=y-yse,ymax=y+yse),colour=NA,alpha=.25)+
+            #geom_line(data=subset(pr,var==vars[j]),aes(x=x,y=y),colour="black")+
+            scale_x_continuous(limits=c(-25,25))+ #you need about a 10 year buffer for a good fit
+            #scale_color_brewer(palette="Dark2")+
+            #scale_fill_brewer(palette="Dark2")+
+            scale_color_manual(values=cols)+
+            scale_fill_manual(values=cols)+
+            scale_linetype_manual(values=linetypes)+
+            #labs(x="Time since menopause (years)",y="y",title=names(vars)[j])+#,title=sprintf("y%02d",j))+
+            labs(x="",y="",title=keep_list[vars[j],"prettyname"])+
+            theme_classic(base_size=12)+
+            theme(
+              axis.text.x=element_blank(),
+              plot.title.position = "plot", #plot or panel
+              plot.title = element_text(hjust = 0.1),
+              plot.margin = margin(0, 0, 0, 0),    # remove outer margin
+              panel.spacing = unit(0, "lines"),   # remove spacing between panels (if faceted)
+              panel.border = element_blank()      # optional: remove panel border)
+              )
+}
+
+nrow = round(sqrt(length(g)))
+ncol=1
+while(nrow*ncol < length(g)) ncol=ncol+1
+layout = matrix(c(1:length(g),rep(NA,nrow*ncol)),nrow=nrow,ncol=ncol,byrow = T)
+
+g[[1]]
+
+save=T
+if(save)
+{
+library(cowplot)
+gleg = cowplot::get_legend(g[[1]])
+
+  for (i in 1:length(g)) g[[i]] = g[[i]]+theme(legend.position="none")
+  
+    nrow = 10
+  ncol = 9
+  layout = matrix(seq_len(nrow*ncol),nrow=nrow,ncol=ncol,byrow=TRUE)
+  
+  
+ggsave(sprintf("%s/results/%s.png",outputDir,"yoglen_sim_simulation_study_data_reconstruction_legend"),gleg,width=8,height=6)
+    ggsave(sprintf("%s/results/yoglen_sim_simulation_study_data_reconstruction.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=16*nrow/ncol)
+    ggsave(sprintf("%s/results/yoglen_sim_simulation_study_data_reconstruction.png",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=16*nrow/ncol)
+}
+```
+cor
+```{r}
+#r2 gives same result, so bias must be small
+logi = ms$bestPr[,"x"] < 0 & ms$bestPr[,"x"] >= -25
+print("Known f(t) vs YoGlen:")
+#print(cor.test(msno$bestPr[logi,"y"],ms0$bestPr[logi,"y"]))
+print(cor.test(ms$bestPr[logi,"y"],ms0$bestPr[logi,"y"])) #slightly weaker cor
+print("Known f(t) vs YoGlen with biased FMP:")
+#print(cor.test(msno$bestPr[logi,"y"],msb$bestPr[logi,"y"]))
+print(cor.test(ms$bestPr[logi,"y"],msb$bestPr[logi,"y"])) #slightly weaker cor
+print("Known f(t) vs YoGlen with noisy FMP:")
+#print(cor.test(msno$bestPr[logi,"y"],msn$bestPr[logi,"y"]))
+print(cor.test(ms$bestPr[logi,"y"],msn$bestPr[logi,"y"])) #slightly weaker cor
+```

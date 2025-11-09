@@ -1,0 +1,137 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Glen Nov 2025
+Model selection script
+
+1. lab values
+2. outcomes
+
+Smooths out the imputed values to get a more realistic (and calibrated) prediction. Also used to get jump size (delta).
+
+Note: this is somewhat slow (took me 30 minutes on a 6500 MHz / 64 GB RAM desktop PC). You can instead download the real fit from the Zenodo repository ().
+
+```{r}
+outputDir = "/home/glen/postdoc/yoglen" #working directory
+
+source(sprintf("%s/menopause_script.R",outputDir))
+```
+
+run age_of_menopause_imputation.Rmd first to get imputed data
+```{r}
+Xmi = readRDS(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes_mi.rds",outputDir))
+```
+
+-I use 10x10 repeated cross validation in the paper, but anecdotally 1x10 looks the same and is much faster
+-I use modelSet 1 in the paper but modelSet 2 is a little faster and possibly more realistic (non-constant variables models only)
+```{r}
+set.seed(123)
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+load=T
+save=F
+
+vars = c("e2","fsh","ferritin") #variables to use
+modelSet = 1 #1 or 2
+  #1: jump/no jump x constant/non-constant variance
+  #2: jump/no jump (all non-constant variance)
+opts = "ac"
+if (modelSet > 1) opts = sprintf("%s_modelSet%02d",opts,modelSet)
+
+file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,opts)
+
+
+if(modelSet==2)
+{
+  refModels=1:2
+  models = list(pwGAULSS=GAMSplineQuasiPWGAULSS, GAULSS=GAMSplineGAULSS) #most variables have non-constant variance
+} else 
+{
+  refModels=1:4
+  models = list(splineJump = GAMSplineJump,spline = GAMSpline,pwGAULSS=GAMSplineQuasiPWGAULSS, GAULSS=GAMSplineGAULSS) #good overall but drops ball on non-constant variance i.e. assumes imputed variance over-estimates effect
+}
+mc.cores=1 #set number of cores here (should be 15 imputations, so no reason to go past 15)
+  #note: mc.cores > 1 uses mclapply which only works on unix friendly operating systems (linux and macos)
+    #I have only validated on Ubuntu 24.04.3 LTS
+if(file.exists(file) & load)
+{
+  ms=readRDS(file)
+} else
+{
+  warning("fitting to simulated data, you can download the exact model selection from Zenodo")
+  print(Sys.time())
+  ms = ModelSelectionMI(Xmi,vars=vars,xcol="time_since_menopause",models=models,Nfolds=10,Nrepeats=1,xdelta=c(.01,1,2,3,4,5,10),refModels = refModels,mc.cores=mc.cores)
+  print(Sys.time())
+  if(save) 
+  {
+    saveRDS(ms,file)
+  }
+
+}
+```
+
+compare to aggregated data
+```{r}
+
+
+tcuts   = seq(-25.5,25,by=1)
+
+lagg=list()
+laggse=list()
+for (k in 1:length(Xmi))
+{
+  cat(".")
+  ftemp = Xmi[[k]]
+  ftemp[,"t"] = ftemp[,"time_since_menopause"]
+  tcut = cut(Xmi[[k]][,"time_since_menopause"],tcuts,include.lowest=TRUE)
+
+  lagg[[k]]          = aggregate(ftemp[,c("t",vars)],by=list(tcut=cut(ftemp[,"t"],tcuts)),mean,na.rm=T,drop=F)[,c("t",vars)]
+  laggse[[k]]        = lagg[[k]][,"t",drop=F]
+  laggse[[k]][,vars] = aggregate(ftemp[,vars,drop=F],by=list(tcut=cut(ftemp[,"t"],tcuts)),SEM,na.rm=T,drop=F)[,vars]
+
+  lagg[[k]]        = as.matrix(lagg[[k]])
+  laggse[[k]]        = as.matrix(laggse[[k]])
+}
+ 
+#pool using rubin's rules 
+r = RubinMat(lagg,lse=laggse)
+agg = as.data.frame(r[[1]])
+agg[,sprintf("%sse",colnames(r[[2]]))] = r[[2]]
+
+
+
+```
+
+visualize the imputed data
+```{r}
+library(ggplot2)
+addGT=T
+if(addGT)
+{
+  X0 = read.csv(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes.csv",outputDir))
+  X0[,"time_since_menopause"] = X0[,"t"]
+  agg0 = aggregate(X0[,c("t",vars)],by=list(tcut=cut(X0[,"t"],tcuts)),mean,na.rm=T,drop=F)[,c("t",vars)]
+  agg0[,sprintf("%sse",vars)] = aggregate(X0[,c("t",vars),drop=F],by=list(tcut=cut(X0[,"t"],tcuts)),SEM,na.rm=T,drop=F)[,vars]
+agg0[,"group"] = "ground truth"
+} else agg0= NULL
+
+agg[,"group"]  = "imputed"
+
+temp = rbind(agg[,c("t",vars,sprintf("%sse",vars),"group")],agg0[,c("t",vars,sprintf("%sse",vars),"group")])
+for (j in 1:length(vars))
+{
+  temp[,"y"] = temp[,vars[j]]
+  temp[,"yse"] = temp[,sprintf("%sse",vars[j])]
+  
+  pr = subset(ms$bestPr,var==vars[j]) #best fit (i.e. with model selection)
+  
+  g=ggplot(temp,aes(x=t,y=y,ymin=y-yse,ymax=y+yse,colour=group,shape=group))+
+    geom_pointrange()+
+    geom_line(data=pr,aes(x=x,y=y),inherit.aes=F,colour="black")+
+    geom_ribbon(data=pr,aes(x=x,y=y,ymin=y-yse,ymax=y+yse),inherit.aes=F,colour=NA,fill="black",alpha=.15)+
+    labs(x="Time to menopause (years)",y=vars[j],colour="",shape="")+
+    theme_classic()
+  plot(g)
+}
+```

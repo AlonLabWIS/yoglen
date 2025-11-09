@@ -1,0 +1,1461 @@
+---
+title: "Menopause plots"
+output: html_notebook
+---
+
+Glen Oct 2025
+For making plots
+
+current plots it makes:
+
+```{r}
+gRootName = "yoglen"
+outputDir = "/home/glen/postdoc/yoglen"
+
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+```
+
+```{r}
+keep_list = read.csv(sprintf("%s/data/variable_keep_list.csv",outputDir),row.names=1)
+keepList = keep_list
+
+systemCodex = read.csv(sprintf("%s/data/system_codex.csv",outputDir),row.names=1)
+rownames(systemCodex)=systemCodex[,"variable"]
+
+
+codex = read.csv(sprintf("%s/data/nhanes_preproc_codex.csv",outputDir),row.names=1)
+rownames(codex)=codex[,"name"]
+```
+
+menopause median and IQR:
+```{r}
+save=F
+load=T
+file   = sprintf("%s/results/nhanes_menopause_menopause_quantiles.csv",outputDir)
+if(file.exists(file) & load)
+{
+  #print("file found")
+  r = read.csv(file,row.names=1)
+} else
+{
+  l = list()
+  for (i in 1:length(Xmi))
+  {
+    l[[i]] = matrix(quantile(Xmi[[i]][,"age_menopause"],probs=c(.25,.5,.75),na.rm=T),nrow=1,ncol=3)
+    colnames(l[[i]])=sprintf("Q%.0f",c(25,50,75))
+  }
+  r = RubinMat(l)
+  r = rbind(r[[1]],r[[2]])
+  colnames(r)[colnames(r)=="Q50"] = "median"
+  rownames(r) = c("estimate","standard error")
+  if(save) write.csv(r,file,row.names=T)
+}
+print(r)
+```
+
+```{r}
+opts =  "stats_ac"
+
+tcuts   = seq(-25.5,25,by=1)
+vars    = subset(keep_list,group!="none")[,"variable"]
+vars = c(vars,"depression_score_num")
+#specific adds
+vars = c(vars,"hip_fracture","moderate_depression","moderately_severe_depression","depression_difficulties")
+vars = c(vars,"CERAD","CERADDR","AFT","DSST") 
+
+filef   = sprintf("%s/results/nhanes_menopause_female_mean_%s.csv",outputDir,opts)
+filefsd = sprintf("%s/results/nhanes_menopause_female_sd_%s.csv",outputDir,opts)
+filem   = sprintf("%s/results/nhanes_menopause_male_mean_%s.csv",outputDir,opts)
+filemsd = sprintf("%s/results/nhanes_menopause_male_sd_%s.csv",outputDir,opts)
+
+if(file.exists(filef))
+{
+  aggf = read.csv(filef)
+  aggfsd = read.csv(filefsd)
+  aggm   = read.csv(filem)
+  aggmsd = read.csv(filemsd)
+} else
+{
+  stop("data not found, you must download from zenodo repository (I might put it up on github too but I'm mercurial about it)")
+
+}
+
+aggf[,"sex"] = "female"
+aggm[,"sex"] = "male"
+agg = rbind(aggf,aggm)
+agg0=agg
+```
+
+load cross-validated models
+```{r}
+
+file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,"ac") #available case
+#file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,"mi")  #imputed
+filem=sprintf("%s/results/nhanes_menopause_model_selection_males_%s.rds",outputDir,"ac") #available case
+
+models = list(splineJump = GAMSplineJump,spline = GAMSpline,pwGAULSS=GAMSplineQuasiPWGAULSS, GAULSS=GAMSplineGAULSS)
+if(file.exists(file))
+{
+  ms=readRDS(file)
+} else
+{
+  print(file)
+  stop("download from zenodo")
+}
+
+
+if(file.exists(filem))
+{
+  msm=readRDS(filem)
+} else
+{
+  print(filem)
+  stop("download from zenodo")
+}
+```
+
+
+#Figure 1 c and d
+```{r}
+var = "ferritin"
+names(var)="ferritin"
+ylab=sprintf("%s (z-score)",names(var))
+
+useImputed=FALSE
+medAge=49 #have to manually change gam below
+tcuts =seq(-21,20,by=1)+.5+medAge
+xlim=c(tcuts[1]+.5,tcuts[length(tcuts)]-.5)
+ttest = seq(xlim[1],xlim[2],length=256)
+perimenoLim=c(-8,-0.1)+medAge
+earlyPostLim=c(0.1,4.9)+medAge
+latePostLim=c(5.1,10)+medAge
+yshift = .25 #moves plot up
+
+load=F
+save=T
+opts = "stats"
+if(!useImputed) opts = sprintf("%s_ac",opts)
+file   = sprintf("%s/results/nhanes_menopause_female_mean_by_age_%s.csv",outputDir,opts)
+filesm   = sprintf("%s/results/nhanes_menopause_female_smooth_spline_by_age_%s.csv",outputDir,opts)
+
+if(file.exists(file) & load)
+{
+  agga  = read.csv(file)
+  aggsm = read.csv(filesm)
+} else 
+{
+  lagg = list()
+  laggse = list()
+  laggsm = list()
+  laggsmse = list()
+  for (k in 1:length(Xmi))
+  {
+    temp = Xmi[[k]][,c("RIDAGEYR",vars)]
+    if(!useImputed)
+    {
+      temp[,vars] = Xf[,vars]
+    }
+
+    agga = aggregate(temp,by=list(tcut=cut(temp[,"RIDAGEYR"],tcuts,include.lowest=T)),mean,na.rm=T,drop=F)
+    lagg[[k]] = agga[,c("RIDAGEYR",vars)]
+    laggse[[k]] = aggregate(temp,by=list(tcut=cut(temp[,"RIDAGEYR"],tcuts,include.lowest=T)),SEM,na.rm=T,drop=F)[,c("RIDAGEYR",vars)]
+  
+    #fit model
+    laggsm[[k]] = data.frame(RIDAGEYR=ttest)
+    laggsmse[[k]] = laggsm[[k]]
+    for (jj in 1:length(vars))
+    {
+      temp[,"y"] = temp[,vars[jj]]
+      mod = gam(y~s(RIDAGEYR),data=temp)
+      pr = predict(mod,laggsm[[k]],se.fit=T)
+      laggsm[[k]][,vars[jj]] = pr[[1]]
+      laggsmse[[k]][,vars[jj]] = pr[[2]]
+    }
+    laggsm[[k]] = as.matrix(laggsm[[k]])
+    laggsmse[[k]] = as.matrix(laggsmse[[k]])
+  }
+  agga = agga[,"tcut",drop=F]
+  lagg = RubinMat(lagg,laggse)
+  agga[,colnames(lagg[[1]])] = lagg[[1]]
+  agga[,sprintf("%sse",colnames(lagg[[1]]))] = lagg[[2]]
+
+  laggsm = RubinMat(laggsm,laggsmse)
+  aggsm = data.frame(laggsm[[1]])
+  aggsm[,sprintf("%sse",colnames(laggsm[[1]]))] = laggsm[[2]]
+
+  if(save)
+  {
+    write.csv(agga,file,row.names=F)
+    write.csv(aggsm,filesm,row.names=F)
+  }
+}
+
+
+  agga[,"y"] = agga[,var]+yshift
+  agga[,"se"] = agga[,sprintf("%sse",var)]
+  aggsm[,"y"] = aggsm[,var]+yshift
+  aggsm[,"se"] = aggsm[,sprintf("%sse",var)]
+ybreaks = scales::breaks_pretty(n = 5)(range(c(agga[,"y"]+agga[,"se"],agga[,"y"]-agga[,"se"]),na.rm=T))  
+
+gage = ggplot(agga,aes(x=RIDAGEYR,y=(y),ymin=(y-se),ymax=(y+se)))+
+  #geom_vline(xintercept=49,colour="grey75",size=1)+
+  geom_pointrange(size=.2,linewidth=1,colour="grey60")+
+  geom_line(data=aggsm,colour="blue")+
+  geom_ribbon(data=aggsm,fill='blue',colour=NA,alpha=.15)+
+  scale_y_continuous(breaks=ybreaks+yshift,labels = ybreaks)+
+  labs(x="Age (years)",y=ylab)+ #,title="c)"
+  theme_minimal(base_size=24)
+  #theme_classic(base_size=24)
+
+addHist=TRUE
+if(addHist)
+{
+  d = numeric()
+  for (i in 1:length(Xmi)) d = c(d,Xmi[[i]][,"age_menopause"])
+  d = density(d,bw=1.5)
+  pz = data.frame(age=d$x,pr=d$y)
+
+  #gage = gage + geom_area(data=pz[pz[,"age"] >= xlim[1] & pz[,"age"] <= xlim[2] ,],aes(x=age,y = pr*3.5),colour="grey50",fill="grey75",inherit.aes=F,size=1) #good for alp
+  gage = gage + geom_area(data=pz[pz[,"age"] >= xlim[1] & pz[,"age"] <= xlim[2] ,],aes(x=age,y = pr*4.5),colour="grey50",fill="grey75",inherit.aes=F,size=1) #good for ferritin
+}
+
+temp = aggf
+temp[,"x"] = aggf[,"t"]
+temp[,"y"] = aggf[,var]
+temp[,"yse"] = aggf[,sprintf("%sse",var)]
+
+plotdf = ms[["bestPr"]]
+plotdf = plotdf[plotdf[,"var"]==var,]       
+gt = ggplot(plotdf,aes(x=x,y=y,ymin=y-yse,ymax=y+yse))+
+    #geom_vline(xintercept=0,size=1,colour="grey75")+
+    labs(x="Time to menopause (years)",y=ylab)+ #,title="d)"
+    scale_y_continuous(breaks=ybreaks,labels = ybreaks)+ 
+    geom_pointrange(data=temp,size=.2,linewidth=1,colour="grey60")+
+    geom_line(colour="blue")+
+    geom_ribbon(alpha=.3,colour=NA,fill="blue")+
+    theme_minimal(base_size=24)
+    #theme_classic(base_size=24)
+
+marrangeGrob(list(gage,gt),nrow=1,ncol=2,top=NULL)
+
+
+save=T
+if(save)
+{
+    ggsave(sprintf("%s/results/%s.pdf",outputDir,"fig1d"),gt,width=8,height=6)
+    ggsave(sprintf("%s/results/%s.pdf",outputDir,"fig1c"),gage,width=8,height=6)
+}
+```
+
+#Figure 2 - system by system comparison
+compute using nhanes_menopause_propensity_score_matching_hrt
+```{r}
+#plotdf = subset(ms[["pr"]],model%in%c("pwLinear","spline","splineJump","GAMSplineGAULSS"))
+#plotdf = subset(ms[["pr"]],model%in%c("pwGAULSS","pwSpline","highKSplineJump","highKSpline"))
+plotdf = ms[["bestPr"]]
+plotdf[,"sex"] = "female"
+plotdf = rbind(plotdf[,c("var","x","y","yse","sex")],cbind(msm[["bestPr"]][,c("var","x","y","yse")],sex="male"))
+v = unique(plotdf[,"var"])
+names(v) = keep_list[v,"prettyname"]
+v = v[order(systemCodex[v,"primary"],names(v))]
+g = list()
+temp = agg
+for (j in 1:length(v))
+{
+  temp[,"y"] = agg[,v[j]]
+  temp[,"yse"] = agg[,sprintf("%sse",v[j])]
+  g[[j]] = ggplot(subset(plotdf,var==v[j]),aes(x=x,y=y,ymin=y-yse,ymax=y+yse,colour=sex,fill=sex))+
+    #geom_vline(xintercept=-20,size=.5,colour="grey85")+
+    #geom_vline(xintercept=20,size=.5,colour="grey85")+
+    #geom_vline(xintercept=-10,size=.5,colour="grey85")+
+    #geom_vline(xintercept=10,size=.5,colour="grey85")+
+    geom_vline(xintercept=0,size=1,colour="grey75")+
+    labs(x="",y="",title=keep_list[v[j],"prettyname"])+
+    geom_pointrange(data=temp,aes(x=t),alpha=.15,size=.1)+
+    geom_line()+
+    geom_ribbon(alpha=.3,colour=NA)+
+    #theme_minimal(base_size=12)+
+    theme_classic(base_size=12)+
+      theme(
+            axis.text.x=element_blank(),
+            plot.title.position = "plot", #plot or panel
+            plot.title = element_text(hjust = 0.1),
+            plot.margin = margin(0, 0, 0, 0),    # remove outer margin
+            panel.spacing = unit(0, "lines"),   # remove spacing between panels (if faceted)
+            panel.border = element_blank()      # optional: remove panel border)
+    )
+
+}
+g[[1]]
+
+library(cowplot)
+gleg = cowplot::get_legend(g[[1]])
+
+for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
+
+save=T
+if(save)
+{
+  nrow = 10
+  ncol = 9
+  layout = matrix(seq_len(nrow*ncol),nrow=nrow,ncol=ncol,byrow=TRUE)
+
+ggsave(sprintf("%s/results/%s.png",outputDir,"menopause_nhanes_systems_legend_bytime"),gleg,width=8,height=6)
+    ggsave(sprintf("%s/results/%s.png",outputDir,"menopause_nhanes_systems_bytime"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+    ggsave(sprintf("%s/results/%s.pdf",outputDir,"menopause_nhanes_systems_bytime"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+}
+    
+
+
+```
+
+
+Fib 2b - delta
+```{r}
+bestDelta=read.csv(sprintf("%s/results/nhanes_menopause_model_selection_bestDelta_%s.csv",outputDir,"ac"))
+bestDeltaM=read.csv(sprintf("%s/results/nhanes_menopause_model_selection_males_bestDelta_%s.csv",outputDir,"ac"))
+beta = bestDelta
+if(!isTRUE(all.equal(bestDelta[,"var"],bestDeltaM[,"var"])) | !isTRUE(all.equal(round(bestDelta[,"x"],4),round(bestDeltaM[,"x"],4))) )
+{
+  stop("females and males not aligned")
+}
+beta[,"yvsM"]   = bestDelta[,"y"]-bestDeltaM[,"y"]
+beta[,"yvsMse"] = sqrt(bestDelta[,"yse"]^2+bestDeltaM[,"yse"]^2)
+beta[,"M"]   = bestDeltaM[,"y"]
+beta[,"Mse"] = bestDeltaM[,"yse"]
+```
+
+basic plot
+```{r}
+library(dplyr)
+se_median <- function(x, B = 1000,na.rm=T) {
+  if(na.rm) x <- na.omit(x)
+  n <- length(x)
+  boots <- replicate(B, median(sample(x, n, replace = TRUE)))
+  sd(boots)  # bootstrap standard error of the median
+}
+pcut = .05
+
+logi = round(beta[,"x"],3)==3 #how many year delta?
+plotdf = data.frame(var=beta[logi,"var"],y=beta[logi,"yvsM"],se=beta[logi,"yvsMse"],p=NA) #looks good
+#plotdf = data.frame(var=beta[logi,"var"],y=beta[logi,"y"],se=beta[logi,"yse"],p=NA) #looks good
+#plotdf = data.frame(var=beta[logi,"var"],y=beta[logi,"M"],se=beta[logi,"Mse"],p=NA) #lots of false positives
+
+plotdf[,"pz"] =  2*(1-pnorm(abs(plotdf[,"y"])/plotdf[,"se"])) 
+logi = keep_list[plotdf[,"var"],"group"]=="labs"
+logi[is.na(logi)]=F
+plotdf = plotdf[logi,]
+plotdf[,"system"] = systemCodex[plotdf[,"var"],"primary"]
+system = plotdf[,"system"]
+
+#drop duplicates
+plotdf = subset(plotdf,!(var%in%c("ferr","platelet","k","na","lactate")))
+
+system = plotdf[,"system"]
+
+
+
+plotdf2 = plotdf
+
+#plotdf2[,"padj"] = p.adjust(plotdf2[,"p"],method="BH") #based on E[log(p)]
+plotdf2[,"padj"] = p.adjust(plotdf2[,"pz"],method="BH") #based on z test    #looks a little better and makes more sense
+#plotdf2[,"padj"] = plotdf2[,"pz"]
+
+print("number significant at pz<0.05:")
+print(sum(plotdf2[,"pz"] < pcut))
+print("fdr adjusted:")
+print(sum(plotdf2[,"padj"] < pcut))
+
+print("who didn't jump:")
+print(subset(plotdf2, padj >= pcut)[,c("var","system","pz")] )
+
+  #plotdf2 = subset(plotdf2, pz < 0.05) 
+  plotdf2 = subset(plotdf2, padj < pcut) 
+  #plotdf2 = subset(plotdf2, p < 0.005) #tuned
+
+  print("range:")
+  print(range(abs(plotdf2[,"y"]),na.rm=T))
+
+    labdata = plotdf2[!duplicated(plotdf2[,"system"]),]
+  labdata[,"y"] = 1
+  
+    systemCols = rep("#7F7F7F",nrow(plotdf2))
+  for (i in 1:length(systemCols))
+  {
+    systemCols[i] = keep_list[as.character(plotdf2[i,"var"]),"colour"]
+  }
+  breaks = plotdf2[,"system"]
+  systemCols = systemCols[!duplicated(breaks)]
+  breaks = breaks[!duplicated(breaks)]
+  names(systemCols)=breaks
+
+  #system aggregates
+  plotdf2[,"absy"] = abs(plotdf2[,"y"])
+  sysAgg = aggregate(plotdf2[,c("absy"),drop=F],by=plotdf2[,c("system"),drop=F],median,na.rm=T)
+  sysAgg[,"se"] = aggregate(plotdf2[,c("absy"),drop=F],by=plotdf2[,c("system"),drop=F],se_median,na.rm=T)[,"absy"]
+  sysAgg[,"y"] = sysAgg[,"absy"]
+  #now find central value for each system...
+  representatives=plotdf2 %>%
+    group_by(system) %>%
+    mutate(mean_y = median(absy, na.rm = TRUE)) %>%
+    slice_min(order_by = abs(absy - mean_y), n = 1, with_ties = FALSE) %>%
+    ungroup()
+  representatives=as.data.frame(representatives)
+  rownames(representatives) = representatives[,"system"]
+  sysAgg[,"var"] = representatives[sysAgg[,"system"],"var"]
+  
+  plotdf2 <- plotdf2 %>%
+  group_by(system) %>%
+  mutate(`systemAve` = median(abs(y), na.rm = TRUE)) %>%
+  ungroup()
+plotdf2 = as.data.frame(plotdf2)
+  
+
+    #replace var with pretty names
+  for (i in 1:nrow(plotdf2)) plotdf2[i,"var"] = keep_list[plotdf2[i,"var"],"prettyname"]
+  for (i in 1:nrow(sysAgg)) sysAgg[i,"var"] = keep_list[sysAgg[i,"var"],"prettyname"]
+  
+  inds = order(-plotdf2[,"systemAve"],plotdf2[,"system"],-abs(plotdf2[,"y"]))
+  plotdf2[,"var"] = factor(plotdf2[,"var"],plotdf2[inds,"var"])
+    
+  plotdf2[,"system"] = factor(plotdf2[,"system"],unique(plotdf2[,"system"]))
+  
+  
+
+  g = ggplot(plotdf2,aes(x=var,y=abs(y),ymin=abs(y)-se,ymax=abs(y)+se,fill=system,colour=system))+#,size=abs(slope)))+
+    geom_col()+
+    #geom_point(colour='black')+
+    geom_errorbar(colour="grey",size=1)+
+    #geom_label(aes(label=sprintf("%.3f",p)),fill=NA,colour="black")+
+    
+    #geom_label(data=labdata,aes(label=system),fill=NA,show.legend = F)+
+    geom_pointrange(data=sysAgg,colour="black",size=1,linewidth=1.5)+
+    #labs(x="",y=bquote(tau),title="Time when changes start")+
+    #labs(x="",y="Jump size (z-score)")+
+    labs(x="",y=bquote("|"*Delta~"female - "*Delta~"male| (z-score)"))+
+    scale_color_manual(values = systemCols)+
+    scale_fill_manual( values = systemCols)+
+    #scale_y_continuous(limits=c(0,15,by=2.5))+
+    #scale_y_continuous(breaks=seq(5,15,by=2.5))+ #truncate coords
+    #coord_cartesian(ylim = c(5, 16))+ #truncate coords
+    theme_minimal(base_size=20)+
+    theme(axis.text.x = element_text(angle=90,vjust=.5),
+          #axis.title.y = element_text(angle=0,vjust=.58),
+          legend.title=element_blank(),
+          legend.position="none")
+
+  addLabels=F #will put them on later in Gimp
+if(addLabels)
+{
+  g =g + geom_label_repel(data=labdata,aes(label=system),fill=NA,show.legend = F,size=10,fontface="bold")
+}
+  
+
+print(sysAgg[sort.list(-sysAgg[,"absy"]),])
+  
+#g = g +  coord_cartesian(clip = "off")
+  
+#g = g + coord_flip()
+
+
+
+g
+save=T
+if(save)
+{
+
+      #ggsave(sprintf("%s/results/menopause_nhanes_beta_barplot_%s.pdf",outputDir,opts),do.call(grid.arrange, c(g, nrow=6,ncol=6)), width=16,height=16)
+  ggsave(sprintf("%s/results/menopause_nhanes_fig2b_%s.pdf",outputDir,opts),g, width=16,height=6)
+  ggsave(sprintf("%s/results/menopause_nhanes_fig2b_%s.png",outputDir,opts),g, width=16,height=6)
+  
+}
+```
+
+Fib 2c nhanes vs clalit
+```{r}
+yoavJumps = read.csv(sprintf("%s/data/COMPREHENSIVE_all_models_summary_with_nhanes_names_yoav.csv",outputDir))
+yoavJumps = subset(yoavJumps,nhanes_name!="")
+yoavJumps[,"var"] = yoavJumps[,"nhanes_name"]
+rownames(yoavJumps)=yoavJumps[,"var"]
+
+#check overlap #BMI is MIA
+#setdiff(rownames(yoavJumps),beta[,"var"])
+#setdiff(beta[,"var"],rownames(yoavJumps))
+```
+
+```{r}
+logi = round(beta[,"x"],3)==3 #how many year delta?
+logi[is.na(logi)]=F
+plotdf = data.frame(var=beta[logi,"var"],y=beta[logi,"y"],se=beta[logi,"yse"],p=NA) #looks good and is 
+rownames(plotdf)=plotdf[,"var"]
+
+plotdf[,"clalit"] = NA
+v = intersect(yoavJumps[,"var"],plotdf[,"var"])
+#v = setdiff(v,c("fsh","e2","lh","dhea","progsterone","andro","hprog","test","e1")) #specific drops
+print(sprintf("concordant between systems (N=%d)",length(v)))
+print(v)
+plotdf[v,"clalit"] = yoavJumps[v,"linear_time_3_mean"]
+plotdf[v,"clalitse"] = yoavJumps[v,"linear_time_3_sd"]
+plotdf[,"clalitmin"] = plotdf[,"clalit"]-plotdf[,"clalitse"]
+plotdf[,"clalitmax"] = plotdf[,"clalit"]+plotdf[,"clalitse"]
+
+
+#rescale z for jumps? (some vars z scores that aren't right)
+rescaleJumps=F
+if(rescaleJumps)
+{
+  for (i in 1:nrow(plotdf))
+  {
+    m = mean(subset(Xf,RIDAGEYR>=25 & RIDAGEYR <= 45)[,plotdf[i,"var"]],na.rm=T)
+    s = sd(subset(Xf,RIDAGEYR>=25 & RIDAGEYR <= 45)[,plotdf[i,"var"]],na.rm=T)
+    print(sprintf("m: %.2f, s: %.2f",m,s))
+    plotdf[i,"y"] = (plotdf[i,"y"]-m)/s
+    plotdf[i,"se"] = plotdf[i,"se"]/s
+  }
+}
+
+plotdf[,"system"] = systemCodex[plotdf[,"var"],"primary"]
+
+print(cor.test(plotdf[,"y"],plotdf[,"clalit"],use='pairwise.complete'))
+print(summary(lm(y~clalit,plotdf)))
+
+
+systemCols = rep("#7F7F7F",nrow(plotdf))
+for (i in 1:length(systemCols))
+{
+  systemCols[i] = keep_list[as.character(plotdf[i,"var"]),"colour"]
+}
+breaks = plotdf[,"system"]
+systemCols = systemCols[!duplicated(breaks)]
+breaks = breaks[!duplicated(breaks)]
+names(systemCols)=breaks
+
+plotdf[,"prettyname"] = keep_list[plotdf[,"var"],"prettyname"]
+
+g= ggplot(plotdf,aes(y=clalit,ymin=clalitmin,ymax=clalitmax,x=y,xmin=y-se,xmax=y+se,label=prettyname,colour=system))+
+  geom_abline(slope=1,intercept=0,colour='grey50')+
+  geom_point()+
+  geom_errorbar(width=0)+
+  geom_errorbarh(height=0)+
+  geom_smooth(method="lm",aes(y=clalit,x=y),inherit.aes=F,fullrange=TRUE)+
+  geom_text_repel(show.legend=F,size=4,max.overlaps=15,seed=1)+
+  scale_colour_manual(values=systemCols)+
+  #labs(x="NHANES jump size from method 1",y="Clalit jump size from method 2")+
+  labs(x="NHANES jump size",y="Clalit jump size")+
+  guides(colour = guide_legend(ncol = 10))+
+  theme_minimal(base_size=18)+
+  theme(legend.position="top",
+         legend.key.width = unit(3, 'mm'),
+        legend.text=element_text(size=10),
+        legend.title=element_blank())
+
+g
+
+save=T
+if(save)
+{
+  library(cowplot)
+  gleg = ggdraw(cowplot::get_legend(g))
+  g = g +theme(legend.position = "none")
+    ggsave(sprintf("%s/results/menopause_nhanes_fig2c_leg.pdf",outputDir),gleg, width=16,height=4)
+  ggsave(sprintf("%s/results/menopause_nhanes_fig2c.pdf",outputDir),g, width=8,height=7)
+    ggsave(sprintf("%s/results/menopause_nhanes_fig2c.png",outputDir),g, width=8,height=7)
+}
+```
+
+#Figure 3 - HRT
+correlation with jupm
+```{r}
+df = read.csv(sprintf("%s/results/menopause_labs_hrt_propensity_score_matched.csv",outputDir),row.names=1)
+  print("correlation with jump:")
+  logi = round(beta[,"x"],3)==3 #how many year delta?
+  logi[is.na(logi)]=F
+  plotdf = data.frame(var=beta[logi,"var"],y=beta[logi,"yvsM"],se=beta[logi,"yvsMse"],p=NA) 
+  plotdf = data.frame(var=beta[logi,"var"],y=beta[logi,"y"],se=beta[logi,"yse"],p=NA)
+  rownames(plotdf)=plotdf[,"var"]
+
+  plotdf[,"system"] = keep_list[plotdf[,"var"],"primary"]
+
+  
+plotdf[,"deltahrt"]=-df[rownames(plotdf),"delta"]
+plotdf[,"deltahrtse"]=df[rownames(plotdf),"deltase"]
+#drop gonads
+plotdf = subset(plotdf,system!="gonad")
+print("overall cor:")
+print(cor.test(plotdf[,"y"],plotdf[,"deltahrt"],use='complete'))
+print("excluding iron & iron:")
+logi = !(plotdf[,"system"] %in%c("rbc","iron"))
+print(cor.test(plotdf[logi,"y"],plotdf[logi,"deltahrt"],use='complete'))
+print("excluding iron & iron & inflammation (CRP and HS-CRP):")
+logi = !(plotdf[,"system"] %in%c("rbc","iron","inflammation"))
+print(cor.test(plotdf[logi,"y"],plotdf[logi,"deltahrt"],use='complete'))
+print("excluding bone:")
+logi = !(plotdf[,"system"] %in%c("bone","bone mass"))
+print(cor.test(plotdf[logi,"y"],plotdf[logi,"deltahrt"],use='complete'))
+  
+ggplot(plotdf,aes(x=y,y=deltahrt,label=var))+
+  geom_point()+
+  geom_text_repel(show.legend = F)
+```
+
+csv file for supplemental on HRT
+```{r}
+temp = df
+temp[,"prettyname"] = keep_list[temp[,"var"],"prettyname"]
+temp[,"system"] = keep_list[temp[,"var"],"primary"]
+
+print("significance:")
+print(sprintf("total tests: %.0f",sum(temp[,"padj"],na.rm=T)))
+print(sprintf("padj < .05: %.0f",sum(temp[,"padj"] < .05,na.rm=T)))
+print(sprintf("p    < .10: %.0f",sum(temp[,"pwilcox"] < .1,na.rm=T)))
+print(sprintf("p    < .10 & padj > .05: %.0f",sum(temp[,"pwilcox"] < .1 & temp[,"padj"] >= .05,na.rm=T)))
+
+#fix p values to look sane
+logi = temp[,"pwilcox"] < .01
+logi[is.na(logi)]=F
+#temp[logi,"pwilcox"] = sprintf("10^%.0f",round(log(df[logi,"pwilcox"],10)))
+temp[logi,"pwilcox"] = sprintf("'%.0e",df[logi,"pwilcox"])
+temp[!logi,"pwilcox"] = sprintf("'%.2f",df[!logi,"pwilcox"])
+logi = temp[,"padj"] < .01
+logi[is.na(logi)]=F
+#temp[logi,"padj"] = sprintf("10^%.0f",round(log(df[logi,"padj"],10)))
+temp[logi,"padj"] = sprintf("'%.0e",df[logi,"padj"])
+temp[!logi,"padj"] = sprintf("'%.2f",df[!logi,"padj"])
+
+#drop any with insufficient N
+temp = subset(temp,!is.na(delta))
+
+#round deltas
+#temp[,"delta"] = round(temp[,"delta"],3)
+#temp[,"deltase"] = round(temp[,"deltase"],3)
+temp[,"delta"]   = sprintf("'%.3f",temp[,"delta"])
+temp[,"deltase"] = sprintf("'%.3f",temp[,"deltase"])
+
+#sort by name
+temp = temp[sort.list(temp[,"prettyname"]),]
+
+
+
+write.csv(temp[,c("prettyname","system","N","delta","deltase","pwilcox","padj")],sprintf("%s/results/nhanes_supplemental_hrt.csv",outputDir),row.names=F)
+```
+
+
+```{r}
+mustHavePr = TRUE
+useImputed=F #I have doubts about using this - it generally isn't used by the imputation models so its association will be broken
+acMatch=TRUE #only permits matching using non-imputed values
+if(acMatch) 
+{
+  matchRatio=1
+  preMatchRatio=1
+  opts = "ac"
+} else
+{
+  matchRatio=3
+  preMatchRatio = 4
+  opts = "imp"
+}
+  agg= read.csv(sprintf("%s/results/nhanes_menopause_propensity_score_labs_agg_%s.csv",outputDir,opts))
+  pr = read.csv(sprintf("%s/results/nhanes_menopause_propensity_score_labs_pr_%s.csv",outputDir,opts))
+  
+v = intersect(colnames(agg),subset(keep_list,group=="labs")[,"variable"])
+names(v) = keep_list[v,"prettyname"]
+  
+g = list()
+keepMe = rep(T,length(v))
+for (j in 1:length(v))
+{
+
+  
+  agg[,"y"]    = agg[,sprintf("%s",v[j])] 
+  agg[,"ymin"] = agg[,sprintf("%smin",v[j])]
+  agg[,"ymax"] = agg[,sprintf("%smax",v[j])]
+  pr[,"y"]     = pr[,sprintf("%s",v[j])] 
+  pr[,"ymin"]  = pr[,sprintf("%smin",v[j])]
+  pr[,"ymax"]  = pr[,sprintf("%smax",v[j])]
+  
+
+  #drop anything without an errorbar
+agg[is.na(agg[,"ymin"]) | is.na(agg[,"ymax"]),"y"] = NA
+  
+  if(all(is.na(subset(agg,group=="MRT")[,"y"])) | all(is.na(subset(agg,group=="No MRT")[,"y"])) |
+     all(is.na(subset(agg,group=="MRT")[,"ymin"])) | all(is.na(subset(agg,group=="No MRT")[,"ymin"])) |
+     all(is.na(subset(agg,group=="MRT")[,"ymax"])) | all(is.na(subset(agg,group=="No MRT")[,"ymax"])) |
+    all(is.na(subset(pr,group=="MRT")[,"y"])) | all(is.na(subset(pr,group=="No MRT")[,"y"])) # | all(is.na(subset(pr,group=="Premenopause")[,"y"]))
+     ) 
+  {
+    warning(sprintf("skipping %s, not enough data",v[j]))
+    keepMe[j]=F
+    next
+  }
+  
+  if(mustHavePr)
+  {
+    if(all(is.na(subset(pr,group=="MRT")[,"y"])) | all(is.na(subset(pr,group=="No MRT")[,"y"])) |
+     all(is.na(subset(pr,group=="Premenopause")[,"ymin"])) | 
+    all(is.na(subset(pr,group=="MRT")[,"y"])) | all(is.na(subset(pr,group=="No MRT")[,"y"]))
+     ) 
+    {
+      warning(sprintf("skipping %s, not enough data",v[j]))
+      keepMe[j]=F
+      next
+   }
+  }
+  
+  g[[j]] = ggplot(agg,aes(x=time_since_menopause,y=y,ymin=ymin,ymax=ymax,colour=group,fill=group,shape=group))+
+            geom_vline(xintercept=0,size=1,colour="grey75")+
+  geom_pointrange(size=.1,alpha=.25)+
+  geom_line(data=pr)+
+  geom_ribbon(data=pr,colour=NA,alpha=.2)+
+  scale_colour_manual(breaks=names(colours),values=colours)+
+  scale_fill_manual(breaks=names(colours),values=colours)+
+  labs(x="Time to menopause (years)",y=names(v)[j],title=names(v)[j])+
+  theme_minimal(base_size=8)+
+  theme(legend.title=element_blank())
+}
+print("drops:")
+print(v[!keepMe])
+g = g[keepMe]
+
+
+
+systemsOutputDir = sprintf("%s/results",outputDir)
+  gleg = ggdraw(cowplot::get_legend(g[[1]]))
+for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
+save=T
+if(save)
+{
+
+
+
+  
+  includeLeg=FALSE
+  gm = g
+  ncol = 9
+  nrow = 1
+  while(nrow*ncol < length(gm)+1*includeLeg)
+  {
+    nrow=nrow+1
+  }
+  for(jj in 1:length(gm)) 
+  {
+    gm[[jj]] = gm[[jj]] + labs(x="",y="")+
+      #theme_minimal(base_size=12)+
+      theme_classic(base_size=12)+
+      theme(
+            axis.text.x=element_blank(),
+            plot.title.position = "plot", #plot or panel
+            plot.title = element_text(hjust = 0.1),
+            plot.margin = margin(0, 0, 0, 0),    # remove outer margin
+            panel.spacing = unit(0, "lines"),   # remove spacing between panels (if faceted)
+            panel.border = element_blank()      # optional: remove panel border)
+    )
+  }
+    gleg = ggdraw(cowplot::get_legend(gm[[length(gm)]]))
+  #saveRDS(list(g=gm,leg=gleg),sprintf("%s/%s_%s.rds",systemsOutputDir,"menopause_nhanes_systems_bytime",opts))
+
+  
+    
+  inds = 1:(nrow*ncol-1)
+  inds = inds[inds<=length(gm)]
+  layout = matrix(seq_len(nrow*ncol),nrow=nrow,ncol=ncol,byrow=TRUE)
+  #adjust layout to leave splot for scatter plot:
+  #layout[6,8:9] = Inf
+  #layout[7,] = 53:61
+  
+    g = gm
+    for (jj in 1:length(g)) g[[jj]] = g[[jj]]+theme(legend.position="none")
+
+    if(includeLeg) 
+    {
+      g[[length(g)+1]] = gleg
+    } else ggsave(sprintf("%s/%s_legend.png",systemsOutputDir,"fig3_hrt_leg"),gleg,width=8,height=6)
+    #ggsave(sprintf("%s/%s.png",systemsOutputDir,"menopause_nhanes_hrt_bytime"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+    ggsave(sprintf("%s/%s.pdf",systemsOutputDir,"fig3_hrt"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+
+}
+```
+
+significance:
+```{r}
+print(data.frame(var=v,p=df[v,"padj"],sig=df[v,"padj"] < .05))
+```
+
+#Figure 4 - change point
+subset(ms$prsd,var=="amh" & model=="pwGAULSS")
+load in premenopause models
+```{r}
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+load=T
+save=T
+
+opts="ac"
+#opts = "mi"
+modelSet = 1 #1 or 2
+if (modelSet > 1) opts = sprintf("%s_modelSet%02d",opts,modelSet)
+
+
+file=sprintf("%s/results/nhanes_menopause_premenopause_model_selection_%s.rds",outputDir,opts)
+deltaFile=sprintf("%s/results/nhanes_menopause_premenopause_model_selection_delta_%s.csv",outputDir,opts)
+predFile=sprintf("%s/results/nhanes_menopause_premenopause_model_selection_pred_%s.csv",outputDir,opts)
+bestDeltaFile=sprintf("%s/results/nhanes_menopause_premenopause_model_selection_bestDelta_%s.csv",outputDir,opts)
+bestPredFile=sprintf("%s/results/nhanes_menopause_premenopause_model_selection_bestPred_%s.csv",outputDir,opts)
+
+
+if(modelSet==1)
+{
+  refModels=1:2
+  models = list(GAULSS=GAMSplineGAULSS, HighKGAULSS=HighKGAMSplineGAULSS2)  #high K looks same
+} else 
+{
+  refModels=1:3
+  models = list(linear=LM,spline=GAMSpline,GAULSS=GAMSplineGAULSS) 
+}
+if(file.exists(file) & load)
+{
+  mscp=readRDS(file)
+} else
+{
+  print("files not found")
+  stop("please compute using nhanes_premenopause_model_selection.Rmd")
+}
+```
+
+```{r}
+yoavTimescales = read.csv(sprintf("%s/data/yoav_bar_plot_data_before_menopause.csv",outputDir))
+rownames(yoavTimescales)=yoavTimescales[,"var"]
+
+yoavE2  = read.csv(sprintf("%s/data/yoav_bootstrap_statistics_ref_ages_25_45_Estradiol_female.csv",outputDir))
+yoavFSH = read.csv(sprintf("%s/data/yoav_bootstrap_statistics_ref_ages_25_45_FSH_female.csv",outputDir))
+```
+
+
+```{r}
+library(KernSmooth) #convenient curvature - gives same result as discrete
+g  = list()
+g[[1]] = ggplot(subset(mscp$pr,var=="amh" & model=="GAULSS" & x < 0),aes(x=x,y=y,ymin=y-yse,ymax=y+yse))+
+  geom_line()+
+  geom_ribbon(alpha=.25,colour=NA)+
+  labs(x="Time to menopause (years)",y="z-score",title="a) AMH")+
+  theme_classic()
+
+#rescale z for jumps? (some vars z scores that aren't right)
+rescaleJumps=F
+mfsh = 0
+sfsh = 1
+me2 =  0
+se2 = 1
+if(rescaleJumps)
+{
+  mfsh = mean(subset(Xf, RIDAGEYR>=25 & RIDAGEYR <= 45)[,"fsh"],na.rm=T)
+  sfsh = sd(subset(Xf,   RIDAGEYR>=25 & RIDAGEYR <= 45)[,"fsh"],na.rm=T)
+  me2 =  mean(subset(Xf, RIDAGEYR>=25 & RIDAGEYR <= 45)[,"e2"],na.rm=T)
+  se2 =  sd(subset(Xf,   RIDAGEYR>=25 & RIDAGEYR <= 45)[,"e2"],na.rm=T)
+}
+  
+g[[2]] = ggplot(subset(mscp$pr,var=="fsh" & model=="GAULSS" & x < 0),aes(x=x,y=(y-mfsh)/sfsh,ymin=(y-mfsh-yse)/sfsh,ymax=(y-mfsh+yse)/sfsh))+
+  geom_line()+
+  geom_ribbon(alpha=.25,colour=NA)+
+  labs(x="Time to menopause (years)",y="z-score",title="b) FSH")+
+  theme_classic()
+
+  
+g[[3]] = ggplot(subset(mscp$pr,var=="e2" & model=="GAULSS" & x < 0),aes(x=x,y=(y-me2)/se2,ymin=(y-me2-yse)/se2,ymax=(y-me2+yse)/se2))+
+  geom_line()+
+  geom_ribbon(alpha=.25,colour=NA)+
+  labs(x="Time to menopause (years)",y="z-score",title="c) E2")+
+  theme_classic()
+
+temp = subset(mscp$pr,var=="amh" & model=="GAULSS" & x < 0)
+grad = locpoly(x=temp[,"x"],y=temp[,"y"],drv=2,bandwidth = 0.1,gridsize = nrow(temp))
+amhTime = grad$x[which.max(abs(grad$y))]
+#plot(grad3$x,grad3$y,main="AMH")
+#points(temp[-c(1,nrow(temp)),"x"],diff(diff(temp[,"y"])/diff(temp[,"x"]))/diff(temp[-1,"x"]),col=2,pch=2) #same as manual
+g[[4]] = ggplot(data.frame(x=grad$x,y=grad$y*10^2),aes(x=x,y=y))+
+  geom_abline(slope=0,intercept=0,colour="grey75")+
+  geom_line()+
+  labs(x="Time to menopause (years)",y=bquote("z-score/decade"^2),title="d) AMH Acceleration")+
+  theme_classic()
+  
+temp = subset(mscp$pr,var=="fsh" & model=="GAULSS" & x < 0)
+grad = locpoly(x=temp[,"x"],y=temp[,"y"],drv=2,bandwidth = 0.1,gridsize = nrow(temp))
+#plot(grad3$x,grad3$y,main="AMH")
+#points(temp[-c(1,nrow(temp)),"x"],diff(diff(temp[,"y"])/diff(temp[,"x"]))/diff(temp[-1,"x"]),col=2,pch=2) #same as manual
+g[[5]] = ggplot(data.frame(x=grad$x,y=grad$y*10^2),aes(x=x,y=y))+
+  geom_abline(slope=0,intercept=0,colour="grey75")+
+  geom_line()+
+  labs(x="Time to menopause (years)",y=bquote("z-score/decade"^2),title="e) FSH Acceleration")+
+  theme_classic()
+  
+  
+temp = subset(mscp$pr,var=="e2" & model=="GAULSS" & x < 0)
+grad = locpoly(x=temp[,"x"],y=temp[,"y"],drv=2,bandwidth = 0.1,gridsize = nrow(temp))
+#plot(grad3$x,grad3$y,main="AMH")
+#points(temp[-c(1,nrow(temp)),"x"],diff(diff(temp[,"y"])/diff(temp[,"x"]))/diff(temp[-1,"x"]),col=2,pch=2) #same as manual
+g[[6]] = ggplot(data.frame(x=grad$x,y=grad$y*10^2),aes(x=x,y=y))+
+  geom_abline(slope=0,intercept=0,colour="grey75")+
+  geom_line()+
+  labs(x="Time to menopause (years)",y=bquote("z-score/decade"^2),title="f) E2 Acceleration")+
+  theme_classic()
+
+#SD
+g[[7]] = ggplot(subset(mscp$prsd,var=="amh" & model=="GAULSS" & x < 0),aes(x=x,y=y,ymin=y-yse,ymax=y+yse))+
+  geom_line()+
+  geom_ribbon(alpha=.25,colour=NA)+
+  labs(x="Time to menopause (years)",y="STD (z-score)",title="g) AMH STD")+
+  theme_classic()
+  
+g[[8]] = ggplot(subset(mscp$prsd,var=="fsh" & model=="GAULSS" & x < 0),aes(x=x,y=y,ymin=y-yse,ymax=y+yse))+
+  geom_line()+
+  geom_ribbon(alpha=.25,colour=NA)+
+  labs(x="Time to menopause (years)",y="STD (z-score)",title="h) FSH STD")+
+  theme_classic()
+  
+  
+g[[9]] = ggplot(subset(mscp$prsd,var=="e2" & model=="GAULSS" & x < 0),aes(x=x,y=y,ymin=y-yse,ymax=y+yse))+
+  geom_line()+
+  geom_ribbon(alpha=.25,colour=NA)+
+  labs(x="Time to menopause (years)",y="STD (z-score)",title="i) E2 STD")+
+  theme_classic()
+
+ 
+addYoav=TRUE 
+addOff=F #fsh for e2 and e2 for fsj
+if(addYoav)
+{
+  for (j in c(1,4,7))
+  {
+    addMe = data.frame(yoav=yoavTimescales["fsh","change_point_position"],yoavlow=yoavTimescales["fsh","error_min"],yoavhigh=yoavTimescales["fsh","error_max"])
+      g[[j+1]] = g[[j+1]] + geom_vline(data=addMe,aes(xintercept=yoav),colour="purple")+geom_rect(data=addMe,aes(xmin=yoavlow,xmax=yoavhigh,ymin=-Inf,ymax=Inf),alpha=.15,inherit.aes=F,fill="purple")
+
+    if(addOff)
+    {
+      g[[j+2]] = g[[j+2]] + geom_vline(data=addMe,aes(xintercept=yoav),colour="purple",lty=2)+geom_rect(data=addMe,aes(xmin=yoavlow,xmax=yoavhigh,ymin=-Inf,ymax=Inf),alpha=.15,inherit.aes=F,fill="purple")
+    }
+          
+      addMe = data.frame(yoav=yoavTimescales["e2","change_point_position"],yoavlow=yoavTimescales["e2","error_min"],yoavhigh=yoavTimescales["e2","error_max"])
+
+      g[[j+2]] = g[[j+2]] +  geom_vline(data=addMe,aes(xintercept=yoav),colour="purple")+geom_rect(data=addMe,aes(xmin=yoavlow,xmax=yoavhigh,ymin=-Inf,ymax=Inf),alpha=.25,inherit.aes=F,fill="purple")
+      
+      if(addOff)
+      {
+        g[[j+1]] = g[[j+1]] + geom_vline(data=addMe,aes(xintercept=yoav),colour="purple",lty=2)+geom_rect(data=addMe,aes(xmin=yoavlow,xmax=yoavhigh,ymin=-Inf,ymax=Inf),alpha=.25,inherit.aes=F,fill="purple")
+      }
+  }
+}
+
+addYoavLine=F
+if(addYoavLine)
+{
+  g[[2]] = g[[2]] + geom_line(data=yoavFSH,aes(x=year,y=mean),colour="purple",inherit.aes=F)+geom_ribbon(data=yoavFSH,aes(x=year,y=mean,ymin=mean-std_dev,ymax=mean+std_dev),alpha=.25,colour=NA,fill="purple",inherit.aes=F)
+  
+  g[[3]] = g[[3]] + geom_line(data=yoavE2,aes(x=year,y=mean),colour="purple",inherit.aes=F)+geom_ribbon(data=yoavE2,aes(x=year,y=mean,ymin=mean-std_dev,ymax=mean+std_dev),alpha=.25,colour=NA,fill="purple",inherit.aes=F)
+}
+
+addYoavToAMH=F 
+if(addYoavToAMH)
+{
+  for (j in c(1,4,7))
+  {
+    addMe = data.frame(yoav=yoavTimescales[c("fsh","e2"),"change_point_position"],yoavlow=yoavTimescales[c("fsh","e2"),"error_min"],yoavhigh=yoavTimescales[c("fsh","e2"),"error_max"])
+      g[[j]] = g[[j]] + geom_vline(data=addMe,aes(xintercept=yoav),colour="purple",lty=2)+geom_rect(data=addMe,aes(xmin=yoavlow,xmax=yoavhigh,ymin=-Inf,ymax=Inf),alpha=.15,inherit.aes=F,fill="purple")
+      
+  }
+}
+
+addAMHLine=F #weird 
+if(addYoavToAMH)
+{
+  for (j in c(1,4,7))
+  {
+    addMe = data.frame(y=amhTime)
+      g[[j]] = g[[j]] + geom_vline(data=addMe,aes(xintercept=y),colour="black")
+      
+  }
+}
+  
+layout = matrix(c(1:length(g),rep(NA,9-length(g))),nrow=3,ncol=3,byrow=TRUE)
+marrangeGrob(g,nrow=3,ncol=3,top=NULL,layout_matrix=layout)
+
+save=TRUE
+if(save)
+{
+      ggsave(sprintf("%s/results/fig4cp.pdf",outputDir),marrangeGrob(g,nrow=3,ncol=3,top=NULL,layout_matrix=layout),width=12,height=9)
+      ggsave(sprintf("%s/results/fig4cp.png",outputDir),marrangeGrob(g,nrow=3,ncol=3,top=NULL,layout_matrix=layout),width=12,height=9)
+}
+```
+
+#Outcome summary
+```{r}
+osum =  read.csv(sprintf("%s/data/nhanes_clinical_codex.csv",outputDir))
+rownames(osum)=osum[,"var"]
+v = subset(keep_list,group%in%c("outcomes","special_outcomes"))[,"variable"]
+temp = keep_list[v,c("prettyname","primary")]
+temp[,"var"] = v
+temp[,"description"] = osum[v,"description"] #more info #won't work, codex doesn't have var names
+temp[,"nhanes"] = osum[v,"nhanes"]
+temp[,"notes"] = osum[v,"notes"]
+
+#now count up Ns
+temp[,"N"] = NA
+for (i in 1:nrow(temp))
+{
+  temp[i,"N"] = sum(!is.na(Xf[,temp[i,"var"]]))
+}
+
+temp = temp[sort.list(temp[,"prettyname"]),]
+
+save=T
+if(save)
+{
+write.csv(temp[,c("prettyname","primary","N","nhanes","description","notes")],sprintf("%s/data/nhanes_clinical_variable_summary.csv",outputDir),row.names=F)
+}
+```
+
+#Figure 5 - system by system outcomes
+load cross-validated outcome models
+```{r}
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+load=T
+save=T
+
+
+opts = "ac"
+#opts = "ac_hasStatus" #known menopause status only #slightly sharper at t=0
+modelSet = 2 #1 or 2
+if (modelSet > 1) opts = sprintf("%s_modelSet%02d",opts,modelSet)
+
+file=sprintf("%s/results/nhanes_menopause_binary_outcome_model_selection_%s.rds",outputDir,opts)
+filem=sprintf("%s/results/nhanes_menopause_binary_outcome_model_selection_males_%s.rds",outputDir,opts)
+
+
+if(modelSet==2)
+{
+  models = list(splineJump = GAMSplineJump,spline = GAMSpline)
+} else 
+{
+#models = list(GAMSplineGAULSS=GAMSplineGAULSS)
+#ms = ModelSelectionMI(Xmi[1:2],vars=vars[1:2],xcol="time_since_menopause",models=models,Nfolds=5,xdelta=c(.01,1,2,5,10),xtest=seq(-25,25,by=.1)) 
+#sleep disorder is only one where LMJump might be best model, otherwise it is tied or worse than a different model
+#linear models look like shit
+models = list(linear = LM, pwLinear = PiecewiseLM,  #linearJump=LMJump,  #linear models seem to make things underfit
+              splineJump = GAMSplineJump,spline = GAMSpline, #, pwSpline = PiecewiseGAMSpline
+              highKSpline=HighKGAMSpline,highKSplineJump=HighKGAMSplineJump #sloow #doesn't seem to make a difference #maybe worse?
+               )
+}
+
+
+if(file.exists(file) & load)
+{
+  mso=readRDS(file)
+} else
+{
+  stop("use nhanes_menopause_model_selection.Rmd to be up to date")
+}
+
+
+if(file.exists(filem) & load)
+{
+  msom=readRDS(filem)
+} else
+{
+  stop("use nhanes_menopause_model_selection.Rmd to be up to date")
+}
+agg=agg0
+```
+
+special outcomes
+```{r}
+#plotdf = subset(mso[["pr"]],model%in%c("pwLinear","spline","splineJump","GAMSplineGAULSS"))
+plotdf = subset(mso[["pr"]],model=="splineJump")
+#plotdf = mso[["bestPr"]]
+plotdf[,"sex"] = "female"
+mdf = cbind(msom[["bestPr"]][,c("var","x","y","yse")],sex="male")
+#mdf[,"var"] = gsub("depression_score_num","depression_score",mdf[,"var"])
+plotdf = rbind(plotdf[,c("var","x","y","yse","sex")],mdf)
+plotdf[,"var"] = gsub("depression_score_num","depression_score",plotdf[,"var"])
+#v = unique(plotdf[,"var"])
+#v = subset(keep_list,group=="special_outcomes")[,"variable"]
+v = c("osteoporosis","heart_attack","anemia","depression_score")
+agg[,"depression_score"] = agg[,"depression_score_num"]
+agg[,"depression_scorese"] = agg[,"depression_score_numse"]
+
+names(v) = keep_list[v,"prettyname"]
+g = list()
+temp = agg
+for (j in 1:length(v))
+{
+  plotSub = subset(plotdf,var==v[j])
+  temp[,"y"] = agg[,v[j]]
+  temp[,"yse"] = agg[,sprintf("%sse",v[j])]
+  if(v[j]=="depression_score")
+  {
+    plotSub[,"y"] = plotSub[,"y"]*27
+    plotSub[,"yse"] = plotSub[,"yse"]*27
+    temp[,"y"] = temp[,"y"]*27
+    temp[,"yse"] = temp[,"yse"]*27
+  }
+  g[[j]] = ggplot(plotSub,aes(x=x,y=y,ymin=y-yse,ymax=y+yse,colour=sex,fill=sex))+
+    geom_vline(xintercept=0,colour="grey75",size=1)+
+    labs(x="",y="",title=keep_list[v[j],"prettyname"])+
+    geom_pointrange(data=temp,aes(x=t),alpha=.15,size=.1)+
+    geom_line()+
+    geom_ribbon(alpha=.3,colour=NA)+
+    theme_minimal(base_size=12)+
+    theme_classic(base_size=12)+
+      theme(
+            axis.text.x=element_blank(),
+            plot.title.position = "plot", #plot or panel
+            plot.title = element_text(hjust = 0.1),
+            plot.margin = margin(0, 0, 0, 0),    # remove outer margin
+            panel.spacing = unit(0, "lines"),   # remove spacing between panels (if faceted)
+            panel.border = element_blank()      # optional: remove panel border)
+    )
+
+}
+g[[1]]
+
+library(cowplot)
+gleg = cowplot::get_legend(g[[1]])
+
+for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
+
+save=T
+if(save)
+{
+  nrow = 1
+  ncol = 4
+  layout = matrix(seq_len(nrow*ncol),nrow=nrow,ncol=ncol,byrow=TRUE)
+
+ggsave(sprintf("%s/results/%s.png",outputDir,"menopause_nhanes_special_outcomes_systems_legend_bytime"),gleg,width=8,height=6)
+    ggsave(sprintf("%s/results/%s.png",outputDir,"menopause_nhanes_special_outcomes_systems_bytime"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=3.5)
+    ggsave(sprintf("%s/results/%s.pdf",outputDir,"menopause_nhanes_special_outcomes_systems_bytime"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=3.5)
+}
+```
+
+other outcomes
+```{r}
+#plotdf = subset(mso[["pr"]],model%in%c("pwLinear","spline","splineJump","GAMSplineGAULSS"))
+plotdf = subset(mso[["pr"]],model=="splineJump")
+#plotdf = mso[["bestPr"]]
+plotdf[,"sex"] = "female"
+plotdf = rbind(plotdf[,c("var","x","y","yse","sex")],cbind(msom[["bestPr"]][,c("var","x","y","yse")],sex="male"))
+#v = unique(plotdf[,"var"])
+v = subset(keep_list,group=="outcomes")[,"variable"]
+#v = setdiff(unique(mso[[1]][,"var"]),subset(keep_list,group=="special_outcomes")[,"variable"])
+names(v) = keep_list[v,"prettyname"]
+v = v[order(systemCodex[v,"primary"],names(v))]
+g = list()
+temp = agg
+for (j in 1:length(v))
+{
+  temp[,"y"] = agg[,v[j]]
+  temp[,"yse"] = agg[,sprintf("%sse",v[j])]
+  g[[j]] = ggplot(subset(plotdf,var==v[j]),aes(x=x,y=y,ymin=y-yse,ymax=y+yse,colour=sex,fill=sex))+
+    geom_vline(xintercept=0,colour="grey75",size=1)+
+    labs(x="",y="",title=keep_list[v[j],"prettyname"])+
+    geom_pointrange(data=temp,aes(x=t),alpha=.15,size=.1)+
+    geom_line()+
+    geom_ribbon(alpha=.3,colour=NA)+
+    #theme_minimal(base_size=12)+
+    theme_classic(base_size=12)+
+    theme(
+            axis.text.x=element_blank(),
+            plot.title.position = "plot", #plot or panel
+            plot.title = element_text(hjust = 0.1),
+            plot.margin = margin(0, 0, 0, 0),    # remove outer margin
+            panel.spacing = unit(0, "lines"),   # remove spacing between panels (if faceted)
+            panel.border = element_blank()      # optional: remove panel border)
+    )
+
+}
+g[[1]]
+
+library(cowplot)
+gleg = cowplot::get_legend(g[[1]])
+
+for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
+
+save=T
+if(save)
+{
+  nrow = 5
+  ncol = 9
+  layout = matrix(seq_len(nrow*ncol),nrow=nrow,ncol=ncol,byrow=TRUE)
+
+ggsave(sprintf("%s/results/%s.png",outputDir,"menopause_nhanes_outcomes_systems_legend_bytime"),gleg,width=8,height=6)
+    ggsave(sprintf("%s/results/%s.png",outputDir,"menopause_nhanes_outcomes_systems_bytime"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+    ggsave(sprintf("%s/results/%s.pdf",outputDir,"menopause_nhanes_outcomes_systems_bytime"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+}
+    
+
+
+```
+
+compute deltas
+-these are differences in log-odds ratio
+```{r}
+fem=subset(mso$bestDelta,round(x,2)==3)
+mal=subset(msom$bestDelta,round(x,2)==3)
+if(!all.equal(fem[,"var"],mal[,"var"])) stop("females and males not aligned")
+fem[,"delta"] = fem[,"y"]-mal[,"y"]
+fem[,"deltase"]  = sqrt(fem[,"yse"]^2+mal[,"yse"]^2)
+fem[,"pz"]  = 2*(1-pnorm(abs(fem[,"delta"])/fem[,"deltase"])) #wald test? not sure if this is right
+fem[,"padj"]  = p.adjust(fem[,"pz"],method="BH") 
+
+
+print("pz < .1")
+print(subset(fem,pz < .1)[,c("var","delta","deltase","pz","padj")])
+
+print("BH adjusted p < .05:")
+print(subset(fem,padj < .05)[,c("var","delta","deltase","pz","padj")])
+```
+
+
+depression score properties - known menopause timing
+note these are ordinal-coded (if you have moderate depression then you also have worse depression)
+```{r}
+#aggregated data #these are outcome OR WORSE
+load=T
+save=T
+file = sprintf("%s/results/nhanes_menopause_timing.csv",outputDir)
+
+if(file.exists(file)&load)
+{
+  aggDep = read.csv(aggDep)
+} else
+{
+  stop("data not found")
+}
+
+tab = matrix(NA,nrow=2,ncol=2)
+dimnames(tab)=list(year1=c("no","yes"),past_year1=c("no","yes"))
+tab[1,1] = subset(aggDep,time_to_menopause<1.1)[,"no_moderate_depression"]
+tab[1,2] = subset(aggDep,time_to_menopause<1.1)[,"moderate_depression"]    #includes or worse
+tab[2,1] = sum(subset(aggDep,time_to_menopause>1.1)[,"no_moderate_depression"],na.rm=T)
+tab[2,2] = sum(subset(aggDep,time_to_menopause>1.1)[,"moderate_depression"],na.rm=T) #includes or worse
+
+
+# Run Fisher's exact test
+print(sprintf("moderate depression rates 1 year after (mean: %.0f/%.0f= %.2f) menopause vs later (mean: %.0f/%.0f= %.2f):",
+              tab[1,2],sum(tab[1,]),tab[1,2]/sum(tab[1,]),tab[2,2],sum(tab[2,]),tab[2,2]/sum(tab[2,])))
+print(tab)
+print(fisher.test(tab))
+
+```
+
+
+#supplemental figures
+
+#Fig S1
+use yoglen_validation_step_function.Rmd
+
+#Fig S2
+use yoglen_simulation_study.Rmd
+
+#Fig S3
+NHANES vs SWAN
+load in aggregated data...
+```{r}
+save=T
+load=T
+
+aggopts =  "stats"
+if(useAC) aggopts = sprintf("%s_ac",aggopts)
+aggf   = read.csv(sprintf("%s/results/nhanes_menopause_female_mean_%s.csv",outputDir,aggopts))
+aggfsd   = read.csv(sprintf("%s/results/nhanes_menopause_female_sd_%s.csv",outputDir,aggopts))
+
+aggm   = read.csv(sprintf("%s/results/nhanes_menopause_male_mean_%s.csv",outputDir,aggopts))
+aggmsd   = read.csv(sprintf("%s/results/nhanes_menopause_male_sd_%s.csv",outputDir,aggopts))
+
+swanFile = sprintf("%s/data/swan_mean_fsh_and_e2.csv",outputDir)
+if(file.exists(swanFile)&load)
+{
+  swanAgg = read.csv(swanFile)
+} else
+{
+  swanDir = "/home/glen/postdoc/menopause/data"
+  swanData = read.csv(sprintf("%s/swan_preproc_fsh_and_e2.csv",swanDir),row.names=1)
+  swanData[,"menopause"] = 1*(swanData[,"t"] >= 0)
+  #log scale
+  swanData[,"fsh"] = log(swanData[,"fsh"])
+  swanData[,"e2"] = log(swanData[,"e2"])
+  
+  keepMe = c("t","age","fsh","e2")
+  swanData[,"tcut"] = cut(swanData[,"t"],seq(-10.5,10,by=1),include.lowest=T)
+  swanAgg = aggregate(swanData[,keepMe],by=swanData[,"tcut",drop=F],mean,na.rm=T)
+  swanAgg[,sprintf("%sse",keepMe)] = aggregate(swanData[,keepMe],by=swanData[,"tcut",drop=F],SEM,na.rm=T)[,keepMe]
+  swanAgg[,sprintf("%ssd",keepMe)] = aggregate(swanData[,keepMe],by=swanData[,"tcut",drop=F],sd,na.rm=T)[,keepMe]
+  
+  if(save) write.csv(swanAgg,swanFile,row.names=F)
+}
+```
+barebones comparison - just compare binned data
+```{r}
+temp = aggf
+temp[,"type"] = "NHANES"
+rownames(temp) = temp[,"t"]
+rownames(swanAgg)  = round(swanAgg[,"t"])
+#rownames(swanAgg) = swanAgg[,"tcut"]
+for (v in  c("e2","e2se","fsh","fshse")) temp[rownames(swanAgg),sprintf("swan_%s",v)] = swanAgg[,v]
+
+print('e2 cor:')
+print(cor.test(temp[,"swan_e2"],temp[,"e2"],use='complete'))
+print('fsh cor:')
+print(cor.test(temp[,"swan_fsh"],temp[,"fsh"],use='complete'))
+
+temp = subset(temp,t >= -10 & t <= 10)
+
+g = list()
+g[[1]] = ggplot(temp,aes(x=swan_e2,xmin=swan_e2-swan_e2se,xmax=swan_e2+swan_e2se,y=e2,ymin=e2-e2se,ymax=e2+e2se,colour=t))+
+    geom_smooth(method="lm",colour="grey50")+
+    scico::scale_color_scico(palette='roma')+
+    geom_point()+
+    geom_errorbar(width=0)+
+    geom_errorbarh(height=0)+
+    #annotate("text",x=4.25,y=-1.75,label=sprintf("r=%.2f",cor(temp[,"swan_e2"],temp[,"e2"],use='complete')))+
+    geom_text_repel(data=data.frame(x=3.375,y=-1.1,label=sprintf("r=%.2f",cor(temp[,"swan_e2"],temp[,"e2"],use='complete'))),aes(x=x,y=y,label=label),inherit.aes=F,show.legend=F,size=11,nudge_x=.25,nudge_y=-.2,seed=0)+
+    labs(x="SWAN (log-scale)",y="NHANES (z-score)",title="a) e2",colour="Time since menopause (years)")+#,title=sprintf("y%02d",j))+
+    theme_minimal(base_size=24)+
+    theme(
+        legend.title=element_text(size=14),
+        legend.position=c(.25,.8)
+        )
+
+g[[2]] = ggplot(temp,aes(x=swan_fsh,xmin=swan_fsh-swan_fshse,xmax=swan_fsh+swan_fshse,y=fsh,ymin=fsh-fshse,ymax=fsh+fshse,colour=t))+
+    geom_smooth(method="lm",colour="grey50")+
+    scico::scale_color_scico(palette='roma')+
+    geom_point()+
+    geom_errorbar(width=0)+
+    geom_errorbarh(height=0)+
+    #annotate("text",x=4.25,y=-.25,label=sprintf("r=%.2f",cor(temp[,"swan_fsh"],temp[,"fsh"],use='complete')))+
+    geom_text_repel(data=data.frame(x=4.1,y=1.5,label=sprintf("r=%.2f",cor(temp[,"swan_fsh"],temp[,"fsh"],use='complete'))),aes(x=x,y=y,label=label),inherit.aes=F,show.legend=F,size=11,nudge_x=.25,nudge_y=-.2,seed=0)+
+    labs(x="SWAN (log-scale)",y="NHANES (z-score)",title="b) fsh")+#,title=sprintf("y%02d",j))+
+    theme_minimal(base_size=24)+
+    theme(
+        legend.position="none",
+        legend.title=element_blank()
+        )
+
+save=T
+if(save)
+{
+  nrow = 1
+  ncol = 2
+  layout = matrix(c(1:length(g),rep(NA,nrow*ncol)),nrow=nrow,ncol=ncol,byrow = T)
+  ggsave(sprintf("%s/results/figs3.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL,widths=c(.5,.5)),width=16,height=7)
+  ggsave(sprintf("%s/results/figs3.png",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL,widths=c(.5,.5)),width=16,height=7)
+  #ggsave(sprintf("%s/results/nhanes_menopause_model_selection_e2_and_fsh_legend.pdf",outputDir),gleg,width=8,height=8)
+}
+```
+
+#Fig S4 Males vs Age
+load cross-validated model
+```{r}
+source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+load=T
+save=T
+
+filem=sprintf("%s/results/nhanes_menopause_model_selection_males_%s.rds",outputDir,"ac") #available case
+
+if(file.exists(filem) & load)
+{
+  msm=readRDS(filem)
+} else
+{
+  stop("use nhanes_menopause_model_selection.Rmd to be up to date")
+}
+```
+fig s4
+```{r}
+
+temp = Xm
+temp[,"x"] = Xm[,"RIDAGEYR"]-49
+temp[,"group"] = "Age-49"
+temp = subset(temp,x >= -25 & x <= 25)
+
+#plotdf = subset(ms[["pr"]],model%in%c("pwLinear","spline","splineJump","GAMSplineGAULSS"))
+#plotdf = subset(ms[["pr"]],model%in%c("pwGAULSS","pwSpline","highKSplineJump","highKSpline"))
+plotdf = msm[["bestPr"]]
+plotdf[,"group"] = "YoGlen"
+
+v = unique(plotdf[,"var"])
+names(v) = keep_list[v,"prettyname"]
+v = v[order(systemCodex[v,"primary"],names(v))]
+
+
+g = list()
+for (j in 1:length(v))
+{
+  temp[,"y"] = temp[,v[j]]
+
+  g[[j]] = ggplot(temp,aes(x=x,y=y,colour=group,fill=group))+
+    geom_vline(xintercept=0,size=1,colour="grey75")+
+    stat_summary(size=.1)+
+    #geom_smooth(method="gam",formula=y~s(x))+
+    labs(x="",y="",title=keep_list[v[j],"prettyname"],colour=NA,fill=NA)+
+    geom_line(data=subset(plotdf,var==v[j]))+
+    geom_ribbon(data=subset(plotdf,var==v[j]),aes(ymin=y-yse,ymax=y+yse),alpha=.3,colour=NA)+
+    #theme_minimal(base_size=12)+
+    theme_classic(base_size=12)+
+      theme(
+            axis.text.x=element_blank(),
+            plot.title.position = "plot", #plot or panel
+            plot.title = element_text(hjust = 0.1),
+            plot.margin = margin(0, 0, 0, 0),    # remove outer margin
+            panel.spacing = unit(0, "lines"),   # remove spacing between panels (if faceted)
+            panel.border = element_blank()      # optional: remove panel border)
+    )
+
+}
+g[[1]]
+
+library(cowplot)
+gleg = cowplot::get_legend(g[[1]])
+
+for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
+
+save=T
+if(save)
+{
+  nrow = 10
+  ncol = 9
+  layout = matrix(seq_len(nrow*ncol),nrow=nrow,ncol=ncol,byrow=TRUE)
+
+ggsave(sprintf("%s/results/%s.png",outputDir,"fig3s_males_legend"),gleg,width=8,height=6)
+    ggsave(sprintf("%s/results/%s.png",outputDir,"fig3s_males"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+    ggsave(sprintf("%s/results/%s.pdf",outputDir,"fig3s_males"),marrangeGrob(g,nrow=nrow,ncol=ncol,top=NULL,layout_matrix=layout),width=16,height=16*nrow/ncol)
+}
+  
+```
+
+#Fig S5 - HRT usage
+```{r}
+Xf[,"survey_year"] = dplyr::case_when(
+                      Xf[,"surveyf"] == 1        ~ "1999-00",
+                      Xf[,"surveyf"] == 2        ~ "2001-02",
+                      Xf[,"surveyf"] == 3        ~ "2003-04",
+                      Xf[,"surveyf"] == 4        ~ "2005-06",
+                      Xf[,"surveyf"] == 5        ~ "2007-08",
+                      Xf[,"surveyf"] == 6        ~ "2009-10",
+                      Xf[,"surveyf"] == 7        ~ "2011-12",
+                      Xf[,"surveyf"] == 8        ~ "2013-14",
+                      Xf[,"surveyf"] == 9        ~ "2015-16",
+                      Xf[,"surveyf"] == 10       ~ "2017-18",
+                      Xf[,"surveyf"] == 12       ~ "2022",
+                      Xf[,"surveyf"] == 66       ~ "2018-19",
+                      is.na(Xf[,"surveyf"])      ~ NA_character_)
+
+g = ggplot(Xf,aes(x=survey_year,y=100*bin_hrt_now))+
+  stat_summary()+
+  labs(x="Survey year",y="HRT usage (%)")+
+  theme_minimal()
+g
+save=TRUE
+if (save)
+{
+  ggsave(sprintf("%s/results/figs5_hrt_usage.pdf",outputDir),g,width=8,height=5)
+  ggsave(sprintf("%s/results/figs5_hrt_usage.png",outputDir),g,width=8,height=5)
+}
+
+```

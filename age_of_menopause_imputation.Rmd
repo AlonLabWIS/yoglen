@@ -1,0 +1,161 @@
+---
+title: "Age of menopause imputation"
+output: html_notebook
+---
+
+Glen Nov 2025
+Imputes age of menopause for each person (multiple imputation)
+
+Notes:
+-basic vignette for using YoGlen (FitLatentFun)
+-uses simulated data as example
+-
+
+```{r}
+outputDir = "/home/glen/postdoc/yoglen" #working directory
+
+source(sprintf("%s/menopause_script.R",outputDir))
+```
+
+```{r}
+dataFile = sprintf("%s/data/nhanes_data.csv",outputDir)
+useSim=F
+if(file.exists(dataFile))
+{
+    print("real data found")
+    X0 = read.csv(dataFile)
+} else
+{
+  print("real data not found, using simulated...")
+  useSim =  T
+  X0 = read.csv(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes.csv",outputDir))
+  X0[,"time_since_menopause"] = X0[,"t"]
+}
+
+X = X0
+#X0 is ground truth
+#X is more realistic, so we don't know menopause events that haven't yet happened i.e. age < age_menopause
+X[X[,"age"] < X[,"age_menopause"],"age_menopause"] = NA
+```
+
+YoGlen gets:
+  1. reference distribution for menopause for this population, including smoothing out noisy observations (e.g. pileup at age 45, 50 and 55).
+  2. individualize distribution given observations for everybody supplied (observations: age, menopause status, reported age of menopause, and maybe variable values (unvalidated, usually overfits))
+```{r}
+set.seed(123)
+#fit a latent variable model using YoGlen and defaults
+  #bootstrapping is probably overkill (set nboot=1 if you don't want to bootstrap, will fit to entire population once)
+fit = FitLatentFun(X,vars=NULL,nboot=25,ageCol="age")
+
+#notes:
+  #bootstraps everything (unless iterativeSurvFit=F then it won't bootstrap the time-to-event data)
+  #fits a flexible time-to-event model (prefix "surv" as in survival model) to the reference age and menopause timing (ref_age, ref_status and ref_age_menopause)
+  #uses expectation-maximization to fit a latent variable model using the available info
+    #uses primarily menopause status (status), age (from ageCol), and age of menopause (age_menopause)
+
+  #vars determines which variables to model
+  #FitFun, VarInFit and VarFun all control fitting variable trajectories. This option is unvalidated so use at your own risk. Set vars=NULL to skip.
+
+#important options:
+  #menopause_ages determines the grid of possible menopause ages in the population
+
+```
+example distribution
+```{r}
+#here's the reference distribution for the whole population
+plot(fit$control$menopause_ages,as.numeric(fit$pz00[1,]),ylim=c(0,.3),xlab="Age of menopause",ylab="Probability")
+
+#this person is reporting regular periods but is over age 45
+i = which(X[,"menopause"] == 0 & X[,"age"] > 45)[1]
+points(fit$control$menopause_ages,as.numeric(fit$pzy[i,]),col=2,pch=2)
+
+legend("topleft",c("Population FMP distribution",sprintf("Individual %d's distribution",i)),pch=1:2,col=1:2)
+```
+
+now let's impute age of menopause of each person
+-fit$pz0 works
+```{r}
+set.seed(123)
+M = 15 #number of imputations
+Xmi = list() #multiply-imputed X
+age_menopause_sd=1 #uncertainty in age of menopause, 1 is good
+for (k in 1:M) 
+{
+  Xmi[[k]] = X
+  
+  for (ii in 1:nrow(Xmi[[k]]))
+  {
+    tref = fit$control$menopause_ages
+
+    #now sample
+    #note that SmoothAndSample will upsample if you want (but it'll iterpolate too so...)
+      #better to increase grid spacing on FitLatentFun if you want higher resolution
+    Xmi[[k]][ii,"age_menopause"]        = sample(tref,size=1,prob=as.numeric(fit$pzy[ii,]))
+    Xmi[[k]][ii,"time_since_menopause"] = Xmi[[k]][ii,"age"]-Xmi[[k]][ii,"age_menopause"]
+    Xmi[[k]][ii,"menopause"]            = 1*(Xmi[[k]][ii,"time_since_menopause"]>=0)
+  }
+}
+
+save=T
+if(save)
+{
+  if(useSim) saveRDS(Xmi,sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes_mi.rds",outputDir))
+  else  saveRDS(Xmi,sprintf("%s/data/nhanes_data_mi.rds",outputDir))
+}
+```
+
+now we can compare the ground truth to the estimated trajectories
+-raw pooling will be biased if there is more than just a jump (model selection cleans this up)
+
+```{r}
+vars = c("e2","fsh","ferritin") #variables to use
+
+tcuts   = seq(-25.5,25,by=1)
+
+lagg=list()
+laggse=list()
+for (k in 1:length(Xmi))
+{
+  cat(".")
+  ftemp = Xmi[[k]]
+  ftemp[,"t"] = ftemp[,"time_since_menopause"]
+  tcut = cut(Xmi[[k]][,"time_since_menopause"],tcuts,include.lowest=TRUE)
+
+  lagg[[k]]          = aggregate(ftemp[,c("t",vars)],by=list(tcut=cut(ftemp[,"t"],tcuts)),mean,na.rm=T,drop=F)[,c("t",vars)]
+  laggse[[k]]        = lagg[[k]][,"t",drop=F]
+  laggse[[k]][,vars] = aggregate(ftemp[,vars,drop=F],by=list(tcut=cut(ftemp[,"t"],tcuts)),SEM,na.rm=T,drop=F)[,vars]
+
+  lagg[[k]]        = as.matrix(lagg[[k]])
+  laggse[[k]]        = as.matrix(laggse[[k]])
+}
+ 
+#pool using rubin's rules 
+r = RubinMat(lagg,lse=laggse)
+agg = as.data.frame(r[[1]])
+agg[,sprintf("%sse",colnames(r[[2]]))] = r[[2]]
+
+
+
+```
+
+visualize the imputed data
+-jumps are very well captured using menopause status alone (it's binary info)
+-gradual decline requires model selection, which can be done post hoc (see model_selection.Rmd)
+```{r}
+library(ggplot2)
+agg0 = aggregate(X0[,c("t",vars)],by=list(tcut=cut(X0[,"t"],tcuts)),mean,na.rm=T,drop=F)[,c("t",vars)]
+agg0[,sprintf("%sse",vars)] = aggregate(X0[,c("t",vars),drop=F],by=list(tcut=cut(X0[,"t"],tcuts)),SEM,na.rm=T,drop=F)[,vars]
+agg[,"group"]  = "imputed"
+agg0[,"group"] = "ground truth"
+temp = rbind(agg[,c("t",vars,sprintf("%sse",vars),"group")],agg0[,c("t",vars,sprintf("%sse",vars),"group")])
+for (j in 1:length(vars))
+{
+  temp[,"y"] = temp[,vars[j]]
+  temp[,"yse"] = temp[,sprintf("%sse",vars[j])]
+  g=ggplot(temp,aes(x=t,y=y,ymin=y-yse,ymax=y+yse,colour=group,shape=group))+
+    geom_pointrange()+
+    labs(x="Time to menopause (years)",y=vars[j],colour="",shape="")+
+    theme_classic()
+  plot(g)
+}
+```

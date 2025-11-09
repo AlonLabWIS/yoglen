@@ -1,0 +1,66 @@
+var,nhanes,notes,description
+kidney_disease,KIQ02(0 and 2),,Ever told you had weak/failing kidneys
+kidney_stones,KIQ026,,Ever had kidney stones?
+leak_urine,"KIQ04(2, 4 and 6)",,Leak urine during physical activities
+gout,MCQ160N,,Doctor ever told you that you had gout?
+heart_failure,MCQ160B,,Ever told had congestive heart failure
+heart_disease,MCQ160C,,Ever told you had coronary heart disease
+angina,MCQ160D,,Ever told you had angina/angina pectoris
+heart_attack,MCQ160E,,Ever told you had heart attack
+stroke,MCQ160F,,Ever told you had a stroke
+diabetes,DIQ010,“borderline recoded as diabetic”,Doctor told you have diabetes
+arthritis,MCQ160A,,Doctor ever said you had arthritis
+hip_fracture,OSQ010A,,Broken or fractured a hip
+osteoporosis,OSQ060,,Ever told had osteoporosis/brittle bones
+taken_immunosuppressant,OSQ130,,Ever taken prednisone or cortisone daily
+weak_grip,MGXH(1-2)T(1-3),Max; cutoffs: 29 kg and 18 kg (Huemer 2023),
+slow_gait,"MSXW20TM, MSXWTIME",,
+managing_money_hard,PFQ061A,any reported difficulty,Managing money difficulty
+walk_quarter_mile,PFQ061B,any reported difficulty,Walking for a quarter mile difficulty
+walk_10steps,PFQ061C,any reported difficulty,Walking up ten steps difficulty
+crouching,PFQ061D,any reported difficulty,"Stooping, crouching, kneeling difficulty"
+lifting_carrying,PFQ061E,any reported difficulty,Lifting or carrying difficulty
+chores,PFQ061F,any reported difficulty,House chore difficulty
+preparing_meals,PFQ061G,any reported difficulty,Preparing meals difficulty
+walk_across_floor,PFQ061H,any reported difficulty,Walking between rooms on same floor
+stand_from_chair,PFQ061I,any reported difficulty,Standingup from armless chair difficulty
+stand_from_bed,PFQ061J,any reported difficulty,Getting in and out of bed difficulty
+cutlery,PFQ061K,any reported difficulty,"Using fork, knife, drinking from cup"
+dressing,PFQ061L,any reported difficulty,Dressing yourself difficulty
+protracted_standing,PFQ061M,any reported difficulty,Standing for long periods difficulty
+protracted_sitting,PFQ061N,any reported difficulty,Sitting for long periods difficulty
+reaching_overhead,PFQ061O,any reported difficulty,Reaching up over head difficulty
+grasping,PFQ061P,any reported difficulty,Grasp/holding small objects difficulty
+outings,PFQ061Q,any reported difficulty,"Going out to movies, events difficulty"
+social_events,PFQ061R,any reported difficulty,Attending social event difficulty
+leisure,PFQ061S,any reported difficulty,Leisure activity at home difficulty
+push_pull,PFQ061T,any reported difficulty,Push or pull large objects difficulty
+thyroid_problem,MCQ160M,,Ever told you had thyroid problem
+liver_disease,MCQ160L,,Ever told you had any liver condition
+asthma,MCQ010,,Ever been told you have asthma
+emphysema,MCQ160G,,Ever told you had emphysema
+bronchitis,MCQ160K,,Ever told you had chronic bronchitis
+copd,MCQ160O,,Ever told you had COPD?
+trouble_sleeping,SLQ050,,Ever told doctor had trouble sleeping? 
+smoke_ever,SMQ020,,Smoked at least 100 cigarettes in life
+smoke_now,SMQ040,,Do you now smoke cigarettes 
+anemia,MCQ053,,Taking treatment for anemia/past 3 mos
+snore,SLQ030,how binarized?,How often do you snore?
+sleep_breathing,SLQ120,,How often feel overly sleepy during day?
+sleep_disorder,SLQ060,,Ever told by doctor have sleep disorder?
+falling_asleep,SLQ080,,How often have trouble falling asleep?
+wakeup_at_night,SLQ090,,How often wake up during night?
+wakeup_too_early,SLQ110,,How often feel unrested during the day?
+insufficient_sleep,SLQ130,,How often did you not get enough sleep?
+sleeping_pills,SLQ140,,How often take pills to help you sleep?
+depression_score,DPQ0(1-9)0,"sum, NAs imputed with average",
+little_interest_doing,DPQ010,,Little interest in doing things
+feeling_down,DPQ020,,"Feeling down, depressed, or hopeless"
+depression_sleep,DPQ030,,Trouble sleeping or sleeping too much
+low_energy,DPQ040,,Feeling tired or having little energy
+depression_appetite,DPQ050,,Poor appetite or overeating
+low_self_esteem,DPQ060,,Feeling bad about yourself
+difficulty_concentrating,DPQ070,,Trouble concentrating on things
+depression_speech,DPQ080,,Moving or speaking slowly or too fast
+better_off_dead,DPQ090,,Thought you would be better off dead
+depression_difficulties,DPQ100,,Difficulty these problems have caused

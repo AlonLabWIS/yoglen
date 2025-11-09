@@ -1,0 +1,209 @@
+,variable,type,primary,secondary,other,notes,alias,prettyname,subGroup,group,colour,risk_direction,jump_direction
+sodium,sodium,numeric,kidney,,adrenal cortex,,na,sodium,none,labs,#00A7FF,1,1
+potassium,potassium,numeric,kidney,muscle,adrenal cortex,,k,potassium,none,labs,#00A7FF,1,1
+bicarb,bicarb,numeric,kidney,,,,,bicarb,none,labs,#00A7FF,1,1
+u_creatinine,u_creatinine,numeric,kidney,muscle,,,,u creatinine,none,labs,#00A7FF,-1,-1
+cystatin,cystatin,numeric,kidney,,,,,cystatin,none,labs,#00A7FF,1,1
+b2m,b2m,numeric,kidney,immune inflammation,,,,b2m,none,labs,#00A7FF,1,1
+osmolality,osmolality,numeric,kidney,,,,,osmolality,none,labs,#00A7FF,1,1
+scr,scr,numeric,kidney,,,,,scr,none,labs,#00A7FF,1,1
+bun,bun,numeric,kidney,,,,,bun,none,labs,#00A7FF,1,1
+u_albumin,u_albumin,numeric,kidney,,,,,u albumin,none,labs,#00A7FF,1,-1
+dhea,dhea,numeric,gonad,adrenal cortex,,,,dhea,none,labs,#F763DF,-1,-1
+hprog,hprog,numeric,gonad,,adrenal cortex,,,17-ohp,none,labs,#F763DF,-1,-1
+andro,andro,numeric,gonad,,adrenal cortex,,,andro,none,labs,#F763DF,-1,-1
+calcium,calcium,numeric,bone,,,,,calcium,none,labs,#F8766D,1,1
+phosphate,phosphate,numeric,bone,,,,,phosphate,none,labs,#F8766D,1,1
+pth,pth,numeric,bone,,,,,pth,none,labs,#F8766D,1,1
+alp,alp,numeric,liver,bone,,,,alp,none,labs,#00C08E,1,1
+bone_alp,bone_alp,numeric,bone,,toxin,,,bone alp,none,labs,#F8766D,1,1
+nfl,nfl,numeric,cognition,,,,,nfl,none,labs,#7F96FF,1,1
+test,test,numeric,gonad,,,,,testo,none,labs,#F763DF,-1,-1
+e2,e2,numeric,gonad,,,,,e2,none,labs,#F763DF,-1,-1
+fsh,fsh,numeric,gonad,,,,,fsh,none,labs,#F763DF,1,1
+lh,lh,numeric,gonad,,,,,lh,none,labs,#F763DF,1,1
+progsterone,progsterone,numeric,gonad,,,,,progesterone,none,labs,#F763DF,-1,-1
+shbg,shbg,numeric,liver,glucose metabolism,gonad,,,shbg,none,labs,#00C08E,1,-1
+amh,amh,numeric,gonad,,,,,amh,none,labs,#F763DF,-1,-1
+e1,e1,numeric,gonad,,,,,e1,none,labs,#F763DF,-1,-1
+troponin,troponin,numeric,heart,,,,,troponin,none,labs,#00B5EE,1,1
+bnp,bnp,numeric,heart,,lung,,,bnp,none,labs,#00B5EE,1,1
+ck,ck,numeric,muscle,heart,,,,ck,none,labs,#D69100,-1,1
+apob,apob,numeric,lipid metabolism,heart,,,,apob,none,labs,#00C0B4,1,1
+homocysteine,homocysteine,numeric,kidney,heart,,,,homocysteine,none,labs,#00A7FF,1,1
+sbp,sbp,numeric,heart,,,,,sbp,none,labs,#00B5EE,1,1
+map,map,numeric,heart,,,,,map,none,labs,#00B5EE,1,1
+pp,pp,numeric,heart,,,,,pp,none,labs,#00B5EE,1,1
+fibrinogen,fibrinogen,numeric,clotting,immune inflammation,heart,,,fibrinogen,none,labs,#6FB000,1,1
+crp,crp,numeric,inflammation,immune inflammation,heart;muscle;lung,,,crp,none,labs,#00B813,1,1
+hscrp,hscrp,numeric,inflammation,immune inflammation,heart;muscle;lung,,,hscrp,none,labs,#00B813,1,1
+neutrophils,neutrophils,numeric,wbc,immune inflammation,,,,neutrophils,none,labs,#00BD61,1,-1
+monocytes,monocytes,numeric,wbc,immune inflammation,,,,monocytes,none,labs,#00BD61,1,-1
+lymphocytes,lymphocytes,numeric,wbc,immune inflammation,,,,lymphocytes,none,labs,#00BD61,-1,-1
+platelets,platelets,numeric,clotting,rbc,liver;immune inflammation,,,platelets,none,labs,#6FB000,1,-1
+wbc,wbc,numeric,wbc,,lung;rbc,,,wbc,none,labs,#00BD61,-1,-1
+eosinophils,eosinophils,numeric,wbc,,lung,,,eosinophils,none,labs,#00BD61,1,1
+alt,alt,numeric,liver,muscle,,,,alt,none,labs,#00C08E,1,1
+ast,ast,numeric,liver,muscle,,,,ast,none,labs,#00C08E,1,1
+ggt,ggt,numeric,liver,,,,,ggt,none,labs,#00C08E,1,1
+bilirubin,bilirubin,numeric,liver,,,,,bilirubin,none,labs,#00C08E,1,1
+albumin,albumin,numeric,liver,,muscle,,,albumin,none,labs,#00C08E,-1,1
+transferrin,transferrin,numeric,iron,rbc,,,,transferrin sat.,none,labs,#9CA700,-1,1
+iron,iron,numeric,iron,rbc,,,,iron,none,labs,#9CA700,-1,1
+ferritin,ferritin,numeric,iron,rbc,lung,,ferr,ferritin,none,labs,#9CA700,-1,1
+b12,b12,numeric,micronutrients,rbc,,,,b12,none,labs,#FF62BF,1,1
+folate,folate,numeric,micronutrients,rbc,,,,folate,none,labs,#FF62BF,1,1
+folate_rbc,folate_rbc,numeric,micronutrients,rbc,,,,folate (rbc),none,labs,#FF62BF,1,-1
+hemoglobin,hemoglobin,numeric,iron,rbc,,,,hemoglobin,none,labs,#9CA700,-1,1
+hematocrit,hematocrit,numeric,rbc,,,,,hematocrit,none,labs,#BC9D00,-1,1
+mcv,mcv,numeric,rbc,,,,,mcv,none,labs,#BC9D00,1,1
+rdw,rdw,numeric,rbc,,,,,rdw,none,labs,#BC9D00,1,-1
+ldh,ldh,numeric,muscle,rbc,,,,ldh,none,labs,#D69100,1,1
+rbc,rbc,numeric,rbc,,,,,rbc,none,labs,#BC9D00,-1,1
+tibc,tibc,numeric,iron,,,,,tibc,none,labs,#9CA700,-1,-1
+f_glucose,f_glucose,numeric,glucose metabolism,metabolic,,,,f glucose,none,labs,#00BDD4,1,1
+un_glucose,un_glucose,numeric,glucose metabolism,metabolic,,,,un glucose,none,none,#00BDD4,,
+glycohemoglobin,glycohemoglobin,numeric,glucose metabolism,metabolic,,,,hba1c,none,labs,#00BDD4,1,1
+total_chol,total_chol,numeric,lipid metabolism,metabolic,toxin,,,total chol,none,labs,#00C0B4,1,1
+ldl,ldl,numeric,lipid metabolism,metabolic,heart,,,ldl,none,labs,#00C0B4,1,1
+hdl,hdl,numeric,lipid metabolism,metabolic,heart,,,hdl,none,labs,#00C0B4,1,1
+tri,tri,numeric,lipid metabolism,metabolic,heart,toxin,,tri,none,labs,#00C0B4,1,1
+insulin,insulin,numeric,glucose metabolism,metabolic,,,,insulin,none,labs,#00BDD4,1,1
+cpeptide,cpeptide,numeric,glucose metabolism,metabolic,,,,c-peptide,none,labs,#00BDD4,1,1
+bmi,bmi,numeric,glucose metabolism,metabolic,toxin,,,bmi,none,labs,#00BDD4,1,1
+gtt,gtt,numeric,glucose metabolism,metabolic,,,,gtt,none,labs,#00BDD4,1,1
+sleep_time,sleep_time,numeric,sleep,,,,,sleep time,none,none,7F7F7F,,
+sleep_time_weekends,sleep_time_weekends,numeric,sleep,,,,,sleep time w.e.,none,none,7F7F7F,,
+tsh,tsh,numeric,thyroid,,,,,tsh,none,labs,#FF6A9A,1,-1
+ft4,ft4,numeric,thyroid,,,,,ft4,none,labs,#FF6A9A,1,1
+tt4,tt4,numeric,thyroid,,,,,tt4,none,labs,#FF6A9A,1,1
+ut4,ut4,numeric,thyroid,,,,,ut4,none,none,#FF6A9A,,
+ft3,ft3,numeric,thyroid,,,,,ft3,none,labs,#FF6A9A,-1,1
+tt3,tt3,numeric,thyroid,,,,,tt3,none,labs,#FF6A9A,-1,1
+tpo,tpo,numeric,thyroid,,,,,tpo,none,none,#FF6A9A,,
+atg,atg,numeric,thyroid,,,,,atg,none,none,#FF6A9A,,
+thyroglobulin,thyroglobulin,numeric,thyroid,,,,,thyroglobulin,none,labs,#FF6A9A,-1,-1
+selenium,selenium,numeric,metal,thyroid,,,,selenium,none,labs,#E26EF7,-1,1
+lead,lead,numeric,metal,toxin,,,,lead,none,labs,#E26EF7,1,1
+u_cadmium,u_cadmium,numeric,metal,toxin,,,,u cadmium,none,none,#E26EF7,,
+cobalt,cobalt,numeric,metal,toxin,,,,cobalt,none,labs,#E26EF7,1,-1
+pcb195la,pcb195la,numeric,pop,toxin,,,,pcb195la,none,none,#BC81FF,,
+pcb206la,pcb206la,numeric,pop,toxin,,,,pcb206la,none,none,#BC81FF,,
+pcb196,pcb196,numeric,pop,toxin,,,,pcb196,none,none,#BC81FF,,
+pcb209,pcb209,numeric,pop,toxin,,,,pcb209,none,none,#BC81FF,,
+pcb199,pcb199,numeric,pop,toxin,,,,pcb199,none,none,#BC81FF,,
+pcb194,pcb194,numeric,pop,toxin,,,,pcb194,none,none,#BC81FF,,
+pcb170,pcb170,numeric,pop,toxin,,,,pcb170,none,none,#BC81FF,,
+pcb187,pcb187,numeric,pop,toxin,,,,pcb187,none,none,#BC81FF,,
+pcb180,pcb180,numeric,pop,toxin,,,,pcb180,none,none,#BC81FF,,
+oxychlordane,oxychlordane,numeric,pop,toxin,,,,oxychlordane,none,labs,#BC81FF,1,1
+pcb153,pcb153,numeric,pop,toxin,,,,pcb153,none,none,#BC81FF,,
+pcb074,pcb074,numeric,pop,toxin,,,,pcb074,none,labs,#BC81FF,1,1
+pcb196la,pcb196la,numeric,pop,toxin,,,,pcb196la,none,none,#BC81FF,,
+pcb199la,pcb199la,numeric,pop,toxin,,,,pcb199la,none,none,#BC81FF,,
+pcb074la,pcb074la,numeric,pop,toxin,,,,pcb074la,none,none,#BC81FF,,
+pcb194la,pcb194la,numeric,pop,toxin,,,,pcb194la,none,none,#BC81FF,,
+pcb209la,pcb209la,numeric,pop,toxin,,,,pcb209la,none,none,#BC81FF,,
+RIDAGEYR,RIDAGEYR,numeric,age,,,,,age,none,none,7F7F7F,,
+asthma,asthma,binary,lung,,,,,asthma,outcomes,outcomes,7F7F7F,,
+emphysema,emphysema,binary,lung,,,,,emphysema,outcomes,outcomes,7F7F7F,,
+bronchitis,bronchitis,binary,lung,,,,,bronchitis,outcomes,outcomes,7F7F7F,,
+copd,copd,binary,lung,,,,,copd,outcomes,outcomes,7F7F7F,,
+diabetes,diabetes,binary,misc outcome,metabolic,,,,diabetes,outcomes,outcomes,7F7F7F,,
+anemia,anemia,binary,rbc,iron,,,,anemia,special_outcomes,special_outcomes,#BC9D00,,
+managing_money_hard,managing_money_hard,binary,functional,cognition,,,,iadl accounting,outcomes,outcomes,7F7F7F,,
+heart_failure,heart_failure,binary,heart outcome,heart,,,,heart failure,outcomes,outcomes,7F7F7F,,
+heart_disease,heart_disease,binary,heart outcome,heart,,,,heart disease,outcomes,outcomes,7F7F7F,,
+angina,angina,binary,heart outcome,heart,,,,angina,outcomes,outcomes,7F7F7F,,
+heart_attack,heart_attack,binary,heart outcome,heart,,,,heart attack,special_outcomes,special_outcomes,7F7F7F,,
+stroke,stroke,binary,heart outcome,heart,,,,stroke,outcomes,outcomes,7F7F7F,,
+arthritis,arthritis,binary,bone outcome,bone,,,,arthritis,outcomes,outcomes,7F7F7F,,
+hip_fracture,hip_fracture,binary,bone outcome,bone,,,,hip fracture,none,none,7F7F7F,,
+osteoporosis,osteoporosis,binary,bone outcome,bone,,,,osteoporosis,special_outcomes,special_outcomes,7F7F7F,,
+weak_grip,weak_grip,binary,functional,muscle,bone,,,weak grip,outcomes,outcomes,7F7F7F,,
+liver_disease,liver_disease,binary,misc outcome,liver,,,,liver disease,outcomes,outcomes,7F7F7F,,
+thyroid_problem,thyroid_problem,binary,misc outcome,thyroid,,,,thyroid problem,outcomes,outcomes,7F7F7F,,
+walk_quarter_mile,walk_quarter_mile,binary,functional,muscle,,,,adl 0.25 mile,outcomes,outcomes,7F7F7F,,
+walk_10steps,walk_10steps,binary,functional,muscle,,,,adl 10 steps,outcomes,outcomes,7F7F7F,,
+crouching,crouching,binary,functional,muscle,,,,adl crouching,outcomes,outcomes,7F7F7F,,
+lifting_carrying,lifting_carrying,binary,functional,muscle,,,,adl lift/carry,outcomes,outcomes,7F7F7F,,
+chores,chores,binary,functional,muscle,,,,iadl chores,outcomes,outcomes,7F7F7F,,
+preparing_meals,preparing_meals,binary,functional,muscle,,,,iadl prepare food,outcomes,outcomes,7F7F7F,,
+walk_across_floor,walk_across_floor,binary,functional,muscle,,,,adl cross room,outcomes,outcomes,7F7F7F,,
+stand_from_chair,stand_from_chair,binary,functional,muscle,,,,adl chair-up,outcomes,outcomes,7F7F7F,,
+stand_from_bed,stand_from_bed,binary,functional,muscle,,,,adl bed-up,outcomes,outcomes,7F7F7F,,
+cutlery,cutlery,binary,functional,muscle,,,,adl cutlery,outcomes,outcomes,7F7F7F,,
+dressing,dressing,binary,functional,muscle,,,,adl dressing,outcomes,outcomes,7F7F7F,,
+protracted_standing,protracted_standing,binary,functional,muscle,,,,adl standing,outcomes,outcomes,7F7F7F,,
+reaching_overhead,reaching_overhead,binary,functional,muscle,,,,adl reaching,outcomes,outcomes,7F7F7F,,
+push_pull,push_pull,binary,functional,muscle,,,,adl push/pull,outcomes,outcomes,7F7F7F,,
+grip_strength,grip_strength,numeric,functional,muscle,,,,grip strength,none,none,7F7F7F,,
+kidney_disease,kidney_disease,binary,kidney outcome,kidney,,,,kidney disease,outcomes,outcomes,7F7F7F,,
+kidney_stones,kidney_stones,binary,kidney outcome,kidney,,,,kidney stones,outcomes,outcomes,7F7F7F,,
+gout,gout,binary,kidney outcome,kidney,,,,gout,outcomes,outcomes,7F7F7F,,
+snore,snore,binary,sleep,,,,,snore,outcomes,outcomes,7F7F7F,,
+sleep_breathing,sleep_breathing,binary,sleep,,,,,sleep breathing,outcomes,outcomes,7F7F7F,,
+trouble_sleeping,trouble_sleeping,binary,sleep,,,,,trouble sleeping,outcomes,outcomes,7F7F7F,,
+sleep_disorder,sleep_disorder,binary,sleep,,,,,sleep disorder,outcomes,outcomes,7F7F7F,,
+falling_asleep,falling_asleep,binary,sleep,,,,,diff falling asleep,outcomes,outcomes,7F7F7F,,
+wakeup_at_night,wakeup_at_night,binary,sleep,,,,,wake up at night,outcomes,outcomes,7F7F7F,,
+wakeup_too_early,wakeup_too_early,binary,sleep,,,,,wake up early,outcomes,outcomes,7F7F7F,,
+insufficient_sleep,insufficient_sleep,binary,sleep,,,,,insufficient sleep,outcomes,outcomes,7F7F7F,,
+sleeping_pills,sleeping_pills,binary,sleep,,,,,sleeping pills,outcomes,outcomes,7F7F7F,,
+moderate_depression,moderate_depression,binary,depression,,,,,moderate depress,none,none,7F7F7F,,
+severe_depression,severe_depression,binary,depression,,,,,severe depress,none,none,7F7F7F,,
+depression_difficulties,depression_difficulties,binary,depression,,,,,depress difficulties,none,none,7F7F7F,,
+depression_score,depression_score,numeric,depression,,,,,depress score,special_outcomes,special_outcomes,7F7F7F,,
+fat_mass,fat_mass,numeric,fat mass,body composition,,,,fat mass,none,none,7F7F7F,,
+lean_mass,lean_mass,numeric,lean mass,body composition,,,,lean mass,none,none,7F7F7F,,
+total_bmd,total_bmd,numeric,bone mass,body composition,,,,total bmd,none,labs,#E9842C,-1,-1
+total_bmc,total_bmc,numeric,bone mass,body composition,,,,total bmc,none,labs,#E9842C,-1,-1
+percentage_fat,percentage_fat,numeric,fat mass,body composition,,,,% fat,none,none,7F7F7F,,
+gynoid_fat_mass,gynoid_fat_mass,numeric,fat mass,body composition,,,,gynoid fat mass,none,none,7F7F7F,,
+gynoid_lean_mass,gynoid_lean_mass,numeric,lean mass,body composition,,,,gynoid lean mass,none,none,7F7F7F,,
+gynoid_mass,gynoid_mass,numeric,fat mass,body composition,,,,gynoid mass,none,none,7F7F7F,,
+gynoid_percent_fat,gynoid_percent_fat,numeric,fat mass,body composition,,,,gynoid % fat,none,none,7F7F7F,,
+android_fat_mass,android_fat_mass,numeric,fat mass,body composition,,,,android fat mass,none,none,7F7F7F,,
+android_lean_mass,android_lean_mass,numeric,lean mass,body composition,,,,android lean mass,none,none,7F7F7F,,
+android_mass,android_mass,numeric,fat mass,body composition,,,,android mass,none,none,7F7F7F,,
+android_percent_fat,android_percent_fat,numeric,fat mass,body composition,,,,android % fat,none,none,7F7F7F,,
+femor_neck_bmd,femor_neck_bmd,numeric,bone mass,body composition,,,,femor neck bmd,none,labs,#E9842C,-1,-1
+l1_bmd,l1_bmd,numeric,bone mass,body composition,,,,l1 bmd,none,labs,#E9842C,-1,-1
+l2_bmd,l2_bmd,numeric,bone mass,body composition,,,,l2 bmd,none,labs,#E9842C,-1,-1
+l3_bmd,l3_bmd,numeric,bone mass,body composition,,,,l3 bmd,none,labs,#E9842C,-1,-1
+l4_bmd,l4_bmd,numeric,bone mass,body composition,,,,l4 bmd,none,labs,#E9842C,-1,-1
+smoke_ever,smoke_ever,binary,smoking,lifestyle,,,,ever smoke,outcomes,outcomes,7F7F7F,,
+smoke_now,smoke_now,binary,smoking,lifestyle,,,,smoke now,outcomes,outcomes,7F7F7F,,
+any_mod_activity,any_mod_activity,binary,activity level,lifestyle,,,,any mod activ,none,none,7F7F7F,,
+any_vig_activity,any_vig_activity,binary,activity level,lifestyle,,,,any vig activ,none,none,7F7F7F,,
+any_activity,any_activity,binary,activity level,lifestyle,,,,any activ,none,none,7F7F7F,,
+total_vigorous_activity,total_vigorous_activity,numeric,activity level,lifestyle,,,,total vig activ,none,none,7F7F7F,,
+total_moderate_activity,total_moderate_activity,numeric,activity level,lifestyle,,,,total mod activ,none,none,7F7F7F,,
+total_activity,total_activity,numeric,activity level,lifestyle,,,,total activ,none,none,7F7F7F,,
+special_diet,special_diet,binary,diet,,,,,special_diet,none,none,7F7F7F,,
+low_cal_diet,low_cal_diet,binary,diet,,,,,low cal diet,none,none,7F7F7F,,
+low_fat_diet,low_fat_diet,binary,diet,,,,,low fat diet,none,none,7F7F7F,,
+low_salt_diet,low_salt_diet,binary,diet,,,,,low salt diet,none,none,7F7F7F,,
+energy_intake,energy_intake,numeric,macronutrients (diet),diet,,,,energy intake,none,none,7F7F7F,,
+iron_intake,iron_intake,numeric,macronutrients (diet),diet,,,,iron intake,none,none,7F7F7F,,
+protein_intake,protein_intake,numeric,macronutrients (diet),diet,,,,protein intake,none,none,7F7F7F,,
+carb_intake,carb_intake,numeric,macronutrients (diet),diet,,,,carb intake,none,none,7F7F7F,,
+sugar_intake,sugar_intake,numeric,macronutrients (diet),diet,,,,sugar intake,none,none,7F7F7F,,
+fiber_intake,fiber_intake,numeric,macronutrients (diet),diet,,,,fiber intake,none,none,7F7F7F,,
+fat_intake,fat_intake,numeric,macronutrients (diet),diet,,,,fat intake,none,none,7F7F7F,,
+chol_intake,chol_intake,numeric,micronutrients (diet),diet,,,,chol intake,none,none,7F7F7F,,
+calcium_intake,calcium_intake,numeric,micronutrients (diet),diet,,,,calcium intake,none,none,7F7F7F,,
+na_intake,na_intake,numeric,micronutrients (diet),diet,,,,na intake,none,none,7F7F7F,,
+mg_intake,mg_intake,numeric,micronutrients (diet),diet,,,,mg intake,none,none,7F7F7F,,
+vitd_intake,vitd_intake,numeric,micronutrients (diet),diet,,,,vitd intake,none,none,7F7F7F,,
+folate_intake,folate_intake,numeric,micronutrients (diet),diet,,,,folate intake,none,none,7F7F7F,,
+caffeine_intake,caffeine_intake,numeric,micronutrients (diet),diet,,,,caffeine intake,none,none,7F7F7F,,
+alcohol_intake,alcohol_intake,numeric,macronutrients (diet),diet,,,,alcohol intake,none,none,7F7F7F,,
+sat_fat_intake,sat_fat_intake,numeric,macronutrients (diet),diet,,,,sat fat intake,none,none,7F7F7F,,
+mono_fat_intake,mono_fat_intake,numeric,macronutrients (diet),diet,,,,mono fat intake,none,none,7F7F7F,,
+un_fat_intake,un_fat_intake,numeric,macronutrients (diet),diet,,,,unsat fat intake,none,none,7F7F7F,,
+slow_gait,slow_gait,binary,functional,muscle,,,,slow gait,none,none,7F7F7F,,
+CERAD,CERAD,binary,cognition,,,,,cerad,none,none,#7F96FF,,
+CERADDR,CERADDR,binary,cognition,,,,,ceraddr,none,none,#7F96FF,,
+AFT,AFT,binary,cognition,,,,,aft,none,none,#7F96FF,,
+DSST,DSST,binary,cognition,,,,,dsst,none,none,#7F96FF,,

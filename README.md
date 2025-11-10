@@ -79,18 +79,24 @@ The yoglen algorithm uses expectation maximization to maximize the expected log-
 (Please forgive the use of $\pi_{ij}$ to denote discrete probability parameter set.)
 
 The full $p(a_m|y,a,m)p(a_m|a,m)\prod_j p(y_j|a_m,a,m)$ used a regression model for each $y_j$, $p(y_j|a_m,a,m)$. This model permits a smooth time to menopause dependence $t\equiv a-a_m$ with the potential for a jump at menopause $y(t)f(t)+\delta(t)$. Assuming Gaussian error the full log-likelihood including the latent distribution is
+
 $$
   l=\sum_i \big[ ln(\pi_{ij})-\frac{1}{2\sigma(t_i)^2}(y_i-f(t_i))^2-\frac{1}{2}ln(2\pi\sigma(t_i)^2) \big]
 $$
+
 where $\pi_{ij}$ is the probability of $t_i$ equalling the $j$th grid value given the age of the individual $a_i$ (normalized to $\sum_j \pi_{ij} = 1$).
 Then we use expectation maximization on the log-likelihood. The conditional expectation over all possible t given age is
+
 $$
   E[l|a]=\sum_{ij} \pi_{ij} \big[ ln(\pi_{ij})-\frac{1}{2\sigma(t_i)^2}(y_i-f(t_i))^2-\frac{1}{2}ln(2\pi\sigma(t_i)^2) \big].
 $$
+
 In the expectation maximization approach we iteratively estimate the expected latent variable distribution, $\pi_{ij}$, and use it to maximize the log-likelihood, $max_fE(l|a)$. Since the parameters of $f$ do not mix with the unknown $t$ the likelihood can be separately maximized using the partial expected likelihood
+
 $$
   max_f E[l|a]=max_f\big[ -\frac{1}{2}\sum_{ij} \pi_{ij} \big[ \frac{1}{\sigma(t_i)^2}(y_i-f(t_i))^2+ln(2\pi\sigma(t_i)^2) \big] \big],
 $$
+
 this is exactly the weighted log-likelihood for regression with weights $\pi_{ij}$. We can therefore substitute any regression model into the maximization step (formally the errors must be Gaussian but informally everything works.)
 
 ### YoGlen Algorithm Steps

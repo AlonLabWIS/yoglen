@@ -78,7 +78,7 @@ The yoglen algorithm uses expectation maximization to maximize the expected log-
 
 (Please forgive the use of $\pi_{ij}$ to denote discrete probability parameter set.)
 
-The full $p(a_m|y,a,m)p(a_m|a,m)jp(y_j|a_m,a,m)$ used a regression model for each $y_j$, $p(y_j|a_m,a,m)$. This model permits a smooth time to menopause dependence $t\equiv a-a_m$ with the potential for a jump at menopause $y(t)f(t)+\delta(t)$. Assuming Gaussian error the full log-likelihood including the latent distribution is
+The full $p(a_m|y,a,m)p(a_m|a,m)\prod_j p(y_j|a_m,a,m)$ used a regression model for each $y_j$, $p(y_j|a_m,a,m)$. This model permits a smooth time to menopause dependence $t\equiv a-a_m$ with the potential for a jump at menopause $y(t)f(t)+\delta(t)$. Assuming Gaussian error the full log-likelihood including the latent distribution is
 $$
   l=\sum_i \big[ ln(\pi_{ij})-\frac{1}{2\sigma(t_i)^2}(y_i-f(t_i))^2-\frac{1}{2}ln(2\pi\sigma(t_i)^2) \big]
 $$

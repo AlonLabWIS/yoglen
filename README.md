@@ -1,10 +1,3 @@
-# background
-yoglen was developed using R version 4.5.1. yoglen contains scripts for systems analysis of menopause from large scale studies where menopause timing is unknown. yoglen uses latent variable modelling to infer the time to menopause changes of lab tests and outcomes. it includes two parallel analyses using two related but unique models and two different datasets (NHANES and Clalit).
-
-# installation
-1. Clone the package
-
-
 # yoglen latent variable ("deconvolution") algorithm for inferring unknown menopause timing
 **Background**
 yoglen was developed using R version 4.5.1. yoglen contains scripts for systems analysis of menopause from large scale studies where menopause timing is unknown. yoglen uses latent variable modelling to infer the time to menopause changes of lab tests and outcomes. it includes two parallel analyses using two related but unique models and two different datasets (NHANES and Clalit).
@@ -53,8 +46,9 @@ There is an associated Zenodo repository that is recommended but not strictly ne
 ## ⚙️ Installation
 1. Clone repository  
 2. Install dependencies  
-3. Install and open Rstudio   
-4. Ready to go!  
+3. Install and open Rstudio
+4. Set outputDir to your desired directory
+6. Ready to go!  
 
 ```bash
 git clone git@github.com:AlonLabWIS/yoglen.git

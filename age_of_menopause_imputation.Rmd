@@ -12,8 +12,8 @@ Notes:
 -
 
 ```{r}
-outputDir = "/home/glen/yoglen" #working directory
-
+outputDir = "/home/glen/yoglen" #set working directory here
+gSaveDefault = F
 source(sprintf("%s/menopause_script.R",outputDir))
 ```
 
@@ -96,7 +96,7 @@ for (k in 1:M)
   }
 }
 
-save=T
+save=gSaveDefault
 if(save)
 {
   if(useSim) saveRDS(Xmi,sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes_mi.rds",outputDir))

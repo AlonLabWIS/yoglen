@@ -13,6 +13,63 @@ ggplot_default_colors <- function(n) {
   scales::hue_pal()(n)
 }
 
+meansd = function(x,na.rm=F,sem=F,sigdigs=2,ret="list")
+{
+  m = mean(x,na.rm=na.rm)
+  s = sd(x,na.rm=na.rm)
+  if(sem) s=s/sqrt(sum(!is.na(x)))
+  if(ret=="string")
+  {
+    s = signif(s,sigdigs)
+    num = NumLeadingZeros(s)+sigdigs
+    m = round(m,num)
+    st = sprintf("%.04e \\pm %.04e",m,s)
+    return(st)
+  }
+  else return(list(mean=m,sd=s))
+}
+
+NumLeadingZeros =function(x,eps=1e-30)
+{
+  #returns number of leading zeros in front of x e.g. 0.00002 would return 5
+  
+  if(x>(1-eps)) return(0)
+  else
+  {
+    nzero=0
+    y=x
+    while(y<(1-eps))
+    {
+      nzero=nzero+1
+      y=y*10
+    }
+    return(nzero)
+  }
+}
+
+RMSE = function (pred, obs, na.rm = FALSE) 
+{
+  return(sqrt(mean((pred - obs)^2, na.rm = na.rm)))
+}
+
+R2 = function(obs,est,na.rm=F,multi=!is.null(dim(obs)))
+{
+  #est: estimated y
+  #obs: observed y
+  if(!multi)
+  {
+    #r2 =  1 - sum((obs-est)^2,na.rm=na.rm)/sum((obs-mean(obs,na.rm=na.rm))^2,na.rm=na.rm)
+    r2 =  1 - mean((obs-est)^2,na.rm=na.rm)/mean((obs-mean(obs,na.rm=na.rm))^2,na.rm=na.rm) #not sure which to use... this makes sense to me when lots of data are missing in est (MCAR)
+    #if data are MAR should I only compare mean of obs for which est is non na?
+  }
+  else
+  {
+    r2 = numeric(ncol(est))
+    for (i in 1:ncol(est)) r2[i] = R2(obs[,i],est[,i],na.rm=na.rm,multi=F)
+  }
+  return(r2)
+}
+
 ClusterMean = function(x,modelNames="V",G=1:4,...)
 {
   x = x[!is.na(x)]

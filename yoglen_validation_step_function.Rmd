@@ -11,8 +11,9 @@ Simulate a step function lab test for menopause and show that YoGlen is insensit
 
 ```{r}
 gRootName = "yoglen"
+gSaveDefault=F
 
-outputDir = "/home/glen/postdoc/yoglen" #analysis directory
+outputDir = "/home/glen/yoglen" #set analysis directory here
 
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
 library(ggplot2)
@@ -82,7 +83,7 @@ g = ggplot(plotdf,aes(x=age_menopause,colour=group,fill=group))+
   theme_classic(base_size=20)
 g
 
-save=T
+save=gSaveDefault
 if(save)
 {
   ggsave(sprintf("%s/results/yoglen_validation_step_function_age_of_menopause.pdf",outputDir),g,width=12,height=7)
@@ -183,7 +184,7 @@ for (j in 1:M)
   mi[[j]] = mdata
 }
 
-save=T
+save=gSaveDefault
 load=T
 file=sprintf("%s/results/yoglen_step_function_test_mi.rds",outputDir)
 if(file.exists(file) & load)
@@ -277,7 +278,7 @@ aggn_v2[,sprintf("%sse",colnames(r[[2]]))] = r[[2]]
 ```
 ```{r}
 load=T
-save=T
+save=gSaveDefault
 models = list(splineJump = GAMSplineJump,spline = GAMSpline) 
 mc.cores=1
 
@@ -406,7 +407,7 @@ g
 #  theme_minimal()+
 #  theme(axis.title.y=element_text(angle=0,vjust=.55))
 
-save=T
+save=gSaveDefault
 if(save)
 {
   library(cowplot)
@@ -462,7 +463,7 @@ g
 #  theme_minimal()+
 #  theme(axis.title.y=element_text(angle=0,vjust=.55))
 
-save=T
+save=gSaveDefault
 if(save)
 {
   library(cowplot)
@@ -513,7 +514,7 @@ g
 #  theme_minimal()+
 #  theme(axis.title.y=element_text(angle=0,vjust=.55))
 
-save=T
+save=gSaveDefault
 if(save)
 {
   library(cowplot)
@@ -561,7 +562,7 @@ g
 #  theme_minimal()+
 #  theme(axis.title.y=element_text(angle=0,vjust=.55))
 
-save=T
+save=gSaveDefault
 if(save)
 {
   library(cowplot)

@@ -14,8 +14,8 @@ Model choices:
 
 ```{r}
 gRootName = "yoglen"
-
-outputDir = "/home/glen/postdoc/yoglen" #analysis directory
+gSaveDefault=F
+outputDir = "/home/glen/yoglen" #analysis directory
 
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
 library(ggplot2)
@@ -58,7 +58,7 @@ load cross-validated models
 ```{r}
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
 load=T
-save=T
+save=gSaveDefault
 file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,"ac") #available case
 #file=sprintf("%s/results/nhanes_menopause_model_selection_%s.rds",outputDir,"mi")  #imputed
 
@@ -73,7 +73,7 @@ if(file.exists(file) & load)
 ```
 load correlation structure
 ```{r}
-save=T
+save=gSaveDefault
 load=T
 scaleBySD=TRUE #divide by estimated sd ? I think you should...
 useAC=F #use available case data for lab tests? #will have NAs if you do
@@ -100,7 +100,7 @@ generate data
 -accept-reject so we get only people in trange
 ```{r}
 set.seed(123)
-save=T
+save=gSaveDefault
 load=T
 trange= c(-25,25) #window for accept-reject
 #acceptReject=TRUE #if true then distribution will be constrained but unrealistic
@@ -185,7 +185,7 @@ set.seed(432)
 
 check data
 ```{r}
-save=T
+save=gSaveDefault
 load=T
 useAC=T #use available case data?
 
@@ -292,7 +292,7 @@ for (j in 1:M)
   mi[[j]] = mdata
 }
 
-save=T
+save=gSaveDefault
 load=T
 file=sprintf("%s/results/yoglen_simulation_study_mi.rds",outputDir)
 if(file.exists(file) & load)
@@ -380,7 +380,7 @@ layout = matrix(c(1:length(g),rep(NA,nrow*ncol)),nrow=nrow,ncol=ncol,byrow = T)
 
 g[[1]]
 
-save=F
+save=gSaveDefault
 if(save)
 {
     ggsave(sprintf("%s/results/yoglen_sim_simulation_study_data_aggfit.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
@@ -411,7 +411,7 @@ layout = matrix(c(1:length(g),rep(NA,nrow*ncol)),nrow=nrow,ncol=ncol,byrow = T)
 
 g[[1]]
 
-save=F
+save=gSaveDefault
 if(save)
 {
     ggsave(sprintf("%s/results/yoglen_sim_simulation_study_data_bias_aggfit.pdf",outputDir),marrangeGrob(g,nrow=nrow,ncol=ncol,layout_matrix = layout,top=NULL),width=16,height=12)
@@ -421,7 +421,7 @@ if(save)
 model selection
 ```{r}
 load=T
-save=T
+save=gSaveDefault
 models = list(splineJump = GAMSplineJump,spline = GAMSpline,pwGAULSS=GAMSplineQuasiPWGAULSS, GAULSS=GAMSplineGAULSS)
 mc.cores=5
 Nfolds=10
@@ -558,7 +558,7 @@ layout = matrix(c(1:length(g),rep(NA,nrow*ncol)),nrow=nrow,ncol=ncol,byrow = T)
 
 g[[1]]
 
-save=T
+save=gSaveDefault
 if(save)
 {
 library(cowplot)

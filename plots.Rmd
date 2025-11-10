@@ -10,7 +10,8 @@ current plots it makes:
 
 ```{r}
 gRootName = "yoglen"
-outputDir = "/home/glen/postdoc/yoglen"
+outputDir = "/home/glen/yoglen" #set home directory here
+gSaveDefault = F
 
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
 library(ggplot2)
@@ -32,7 +33,7 @@ rownames(codex)=codex[,"name"]
 
 menopause median and IQR:
 ```{r}
-save=F
+save=gSaveDefault
 load=T
 file   = sprintf("%s/results/nhanes_menopause_menopause_quantiles.csv",outputDir)
 if(file.exists(file) & load)
@@ -41,6 +42,31 @@ if(file.exists(file) & load)
   r = read.csv(file,row.names=1)
 } else
 {
+  
+    dataFile = sprintf("%s/data/nhanes_data.csv",outputDir)
+  useSim=F
+  if(file.exists(dataFile)) #real data
+  {
+    print("real data found")
+    Xf = read.csv(dataFile,row.names=1) #real data
+    Xmi = readRDS(sprintf("%s/data/nhanes_data_mi.rds",outputDir)) #real data
+  } else #sim data
+  {
+    print("real data not found, using simulated...")
+    useSim =  T
+    Xf = read.csv(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes.csv",outputDir),row.names=1) 
+    Xmi = readRDS(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes_mi.rds",outputDir))
+  
+    Xf[,"RIDAGEYR"] = Xf[,"age"] #I named it differently in the simulated data
+    Xf[,"depression_score"] = Xf[,"depression_score_num"]
+    for (k in 1:length(Xmi)) 
+    {
+      Xmi[[k]][,"RIDAGEYR"] = Xmi[[k]][,"age"]
+      Xmi[[k]][,"depression_score"] = Xmi[[k]][,"depression_score_num"]
+    }
+
+  }
+  
   l = list()
   for (i in 1:length(Xmi))
   {
@@ -134,7 +160,7 @@ latePostLim=c(5.1,10)+medAge
 yshift = .25 #moves plot up
 
 load=T
-save=T
+save=gSaveDefault
 opts = "stats"
 if(!useImputed) opts = sprintf("%s_ac",opts)
 file   = sprintf("%s/results/nhanes_menopause_female_mean_by_age_%s.csv",outputDir,opts)
@@ -236,9 +262,22 @@ gage = ggplot(agga,aes(x=RIDAGEYR,y=(y),ymin=(y-se),ymax=(y+se)))+
 addHist=TRUE
 if(addHist)
 {
-  d = numeric()
-  for (i in 1:length(Xmi)) d = c(d,Xmi[[i]][,"age_menopause"])
-  d = density(d,bw=1.5)
+  
+  save=gSaveDefault
+  load=T
+  file = sprintf("%s/data/menopause_ages.csv",outputDir)
+  if (file.exists(file) & load)
+  {
+    menoAges = read.csv(file)[,"menopause_age"]
+  } else
+  {
+    menoAges = numeric()
+    for (i in 1:length(Xmi)) menoAges = c(menoAges,Xmi[[i]][,"age_menopause"])
+    if(save) write.csv(data.frame(menopause_age=menoAges),file,row.names=F)
+  }
+
+
+  d = density(menoAges,bw=1.5)
   pz = data.frame(age=d$x,pr=d$y)
 
   #gage = gage + geom_area(data=pz[pz[,"age"] >= xlim[1] & pz[,"age"] <= xlim[2] ,],aes(x=age,y = pr*3.5),colour="grey50",fill="grey75",inherit.aes=F,size=1) #good for alp
@@ -266,7 +305,7 @@ plot(gage)
 plot(gt)
 
 
-save=T
+save=gSaveDefault
 if(save)
 {
     ggsave(sprintf("%s/results/%s.pdf",outputDir,"fig1d"),gt,width=8,height=6)
@@ -488,7 +527,7 @@ print(sysAgg[sort.list(-sysAgg[,"absy"]),])
 
 
 g
-save=T
+save=gSaveDefault
 if(save)
 {
 
@@ -579,7 +618,7 @@ g= ggplot(plotdf,aes(y=clalit,ymin=clalitmin,ymax=clalitmax,x=y,xmin=y-se,xmax=y
 
 g
 
-save=T
+save=gSaveDefault
 if(save)
 {
   library(cowplot)
@@ -818,7 +857,7 @@ load in premenopause models
 ```{r}
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
 load=T
-save=T
+save=gSaveDefault
 
 opts="ac"
 #opts = "mi"
@@ -1009,7 +1048,7 @@ if(addYoavToAMH)
 layout = matrix(c(1:length(g),rep(NA,9-length(g))),nrow=3,ncol=3,byrow=TRUE)
 marrangeGrob(g,nrow=3,ncol=3,top=NULL,layout_matrix=layout)
 
-save=TRUE
+save=gSaveDefault
 if(save)
 {
       ggsave(sprintf("%s/results/fig4cp.pdf",outputDir),marrangeGrob(g,nrow=3,ncol=3,top=NULL,layout_matrix=layout),width=12,height=9)
@@ -1019,32 +1058,9 @@ if(save)
 
 #Outcome summary
 ```{r}
-osum =  read.csv(sprintf("%s/data/nhanes_clinical_codex.csv",outputDir))
-rownames(osum)=osum[,"var"]
-v = subset(keep_list,group%in%c("outcomes","special_outcomes"))[,"variable"]
-temp = keep_list[v,c("prettyname","primary")]
-temp[,"var"] = v
-temp[,"description"] = osum[v,"description"] #more info #won't work, codex doesn't have var names
-temp[,"nhanes"] = osum[v,"nhanes"]
-temp[,"notes"] = osum[v,"notes"]
+temp = read.csv(sprintf("%s/data/nhanes_clinical_variable_summary.csv",outputDir))
 
-#simulated data doesn't have depression_score, so add it if not here
-if(!("depression_score"%in%colnames(Xf))) Xf[,"depression_score"] = Xf[,"depression_score_num"]
-
-#now count up Ns
-temp[,"N"] = NA
-for (i in 1:nrow(temp))
-{
-  temp[i,"N"] = sum(!is.na(Xf[,temp[i,"var"]]))
-}
-
-temp = temp[sort.list(temp[,"prettyname"]),]
-
-save=T
-if(save)
-{
-write.csv(temp[,c("prettyname","primary","N","nhanes","description","notes")],sprintf("%s/data/nhanes_clinical_variable_summary.csv",outputDir),row.names=F)
-}
+print(head(temp))
 ```
 
 #Figure 5 - system by system outcomes
@@ -1052,7 +1068,7 @@ load cross-validated outcome models
 ```{r}
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
 load=T
-save=T
+save=gSaveDefault
 
 
 opts = "ac"
@@ -1155,7 +1171,7 @@ gleg = cowplot::get_legend(g[[1]])
 
 for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
 
-save=T
+save=gSaveDefault
 if(save)
 {
   nrow = 1
@@ -1211,7 +1227,7 @@ gleg = cowplot::get_legend(g[[1]])
 
 for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
 
-save=T
+save=gSaveDefault
 if(save)
 {
   nrow = 5
@@ -1252,7 +1268,7 @@ note these are ordinal-coded (if you have moderate depression then you also have
 ```{r}
 #aggregated data #these are outcome OR WORSE
 load=T
-save=T
+save=gSaveDefault
 file = sprintf("%s/results/nhanes_menopause_timing.csv",outputDir)
 
 if(file.exists(file)&load)
@@ -1292,7 +1308,7 @@ use yoglen_simulation_study.Rmd
 NHANES vs SWAN
 load in aggregated data...
 ```{r}
-save=T
+save=gSaveDefault
 load=T
 
 aggopts =  "stats"
@@ -1372,7 +1388,7 @@ g[[2]] = ggplot(temp,aes(x=swan_fsh,xmin=swan_fsh-swan_fshse,xmax=swan_fsh+swan_
         legend.title=element_blank()
         )
 
-save=T
+save=gSaveDefault
 if(save)
 {
   nrow = 1
@@ -1389,7 +1405,7 @@ load cross-validated model
 ```{r}
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
 load=T
-save=T
+save=gSaveDefault
 
 filem=sprintf("%s/results/nhanes_menopause_model_selection_males_%s.rds",outputDir,"ac") #available case
 
@@ -1464,7 +1480,7 @@ gleg = cowplot::get_legend(g[[1]])
 
 for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
 
-save=T
+save=gSaveDefault
 if(save)
 {
   nrow = 10
@@ -1481,8 +1497,8 @@ ggsave(sprintf("%s/results/%s.png",outputDir,"fig3s_males_legend"),gleg,width=8,
 #Fig S5 - HRT usage
 ```{r}
 file = sprintf("%s/data/survey_year_hrt.csv",outputDir)
-load=F
-save=T
+load=T
+save=gSaveDefault
 if(file.exists(file) & load)
 {
   aggHRTSum = read.csv(file)
@@ -1516,7 +1532,7 @@ g = ggplot(aggHRTSum,aes(x=survey_year,y=100*bin_hrt_now,ymin=100*(bin_hrt_now-s
   labs(x="Survey year",y="HRT usage (%)")+
   theme_minimal()
 g
-save=TRUE
+save=gSaveDefault
 if (save)
 {
   ggsave(sprintf("%s/results/figs5_hrt_usage.pdf",outputDir),g,width=8,height=5)

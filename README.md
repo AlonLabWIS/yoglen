@@ -47,7 +47,7 @@ There is an associated Zenodo repository that is recommended but not strictly ne
 1. Clone repository  
 2. Install dependencies  
 3. Install and open Rstudio
-4. Set outputDir to your desired directory
+4. Set outputDir to your desired directory (top of each .Rmd script)
 6. Ready to go!  
 
 ```bash

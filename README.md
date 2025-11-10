@@ -29,14 +29,7 @@ Does not include individualized data:
 ## Dependencies
 1. Rstudio is needed to run .rmd files (https://posit.co/downloads/)  
 2. R packages (dependencies.R): c("survival","mgcv","survPen","dplyr, ggplot2","cowplot","scico","gridExtra","ggrepel")  
-3. Some files are too large for GitHub and are on the associated Zenodo repository. Two options: (i) don't download the Zenodo files, continue as normal and use simulated data. (ii) download the Zenodo files that contain the exact analysis files.
 
-
----
-
-# Additional data
-
-There is an associated Zenodo repository that is recommended but not strictly necessary: (not up yet, Nov 10 - will be up within a few weeks)
 
 
 ---

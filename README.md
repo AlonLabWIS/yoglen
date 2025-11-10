@@ -19,12 +19,15 @@ Please cite as:
 
 ## 📘 Description
 Contains:
+
 -essential analysis steps (i.e. yoglen model fitting)
 -plot scripts for each figure
 -aggregated data needed for each figure and summary stats
 -simulated NHANES data
 -unedited analysis scripts for transparency (transparency folder)
+
 Does not include individualized data:
+
 -NHANES data (download here: https://wwwn.cdc.gov/nchs/nhanes/)
 -Clalit electronic medical records
 
@@ -56,7 +59,8 @@ R dependencies.R
 
 ## Usage
 ### Making plots
-Run plot.Rmd
+Run plot.Rmd 
+
 -This will use existing aggregated data from the original analysis
 
 ### Analysis
@@ -76,7 +80,7 @@ The yoglen algorithm uses expectation maximization to maximize the expected log-
 
 (Please forgive the use of $\pi_{ij}$ to denote discrete probability parameter set.)
 
-The full $p(a_m|y,a,m)p(a_m|a,m)jp(y_j|a_m,a,m)$ used a regression model for each $j$ $p(y_j|a_m,a,m)$. This model permits a smooth time to menopause dependence $t\equiv a-a_m$ with the potential for a jump at menopause $y(t)f(t)+\delta(t)#. Assuming Gaussian error the full log-likelihood including the latent distribution is
+The full $p(a_m|y,a,m)p(a_m|a,m)jp(y_j|a_m,a,m)$ used a regression model for each $y_j$, $p(y_j|a_m,a,m)$. This model permits a smooth time to menopause dependence $t\equiv a-a_m$ with the potential for a jump at menopause $y(t)f(t)+\delta(t)$. Assuming Gaussian error the full log-likelihood including the latent distribution is
 $$
   l=\sum_i \big[ ln(\pi_{ij})-\frac{1}{2\sigma(t_i)^2}(y_i-f(t_i))^2-\frac{1}{2}ln(2\pi\sigma(t_i)^2) \big]
 $$

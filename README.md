@@ -49,7 +49,8 @@ There is an associated Zenodo repository that is recommended but not strictly ne
 ```bash
 git clone git@github.com:AlonLabWIS/yoglen.git
 cd yoglen
-R dependencies.R'
+R dependencies.R
+```
 
 ---
 

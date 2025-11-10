@@ -12,7 +12,7 @@ Notes:
 -
 
 ```{r}
-outputDir = "/home/glen/postdoc/yoglen" #working directory
+outputDir = "/home/glen/yoglen" #working directory
 
 source(sprintf("%s/menopause_script.R",outputDir))
 ```

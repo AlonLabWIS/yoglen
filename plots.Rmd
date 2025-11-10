@@ -13,6 +13,9 @@ gRootName = "yoglen"
 outputDir = "/home/glen/postdoc/yoglen"
 
 source(sprintf("%s/menopause_script.R",outputDir),verbose=0)
+library(ggplot2)
+library(gridExtra) #needed for several plots
+library(ggrepel) #needed for labels in one plot
 ```
 
 ```{r}
@@ -59,9 +62,8 @@ opts =  "stats_ac"
 tcuts   = seq(-25.5,25,by=1)
 vars    = subset(keep_list,group!="none")[,"variable"]
 vars = c(vars,"depression_score_num")
-#specific adds
-vars = c(vars,"hip_fracture","moderate_depression","moderately_severe_depression","depression_difficulties")
-vars = c(vars,"CERAD","CERADDR","AFT","DSST") 
+
+
 
 filef   = sprintf("%s/results/nhanes_menopause_female_mean_%s.csv",outputDir,opts)
 filefsd = sprintf("%s/results/nhanes_menopause_female_sd_%s.csv",outputDir,opts)
@@ -131,7 +133,7 @@ earlyPostLim=c(0.1,4.9)+medAge
 latePostLim=c(5.1,10)+medAge
 yshift = .25 #moves plot up
 
-load=F
+load=T
 save=T
 opts = "stats"
 if(!useImputed) opts = sprintf("%s_ac",opts)
@@ -144,6 +146,30 @@ if(file.exists(file) & load)
   aggsm = read.csv(filesm)
 } else 
 {
+  dataFile = sprintf("%s/data/nhanes_data.csv",outputDir)
+  useSim=F
+  if(file.exists(dataFile)) #real data
+  {
+    print("real data found")
+    Xf = read.csv(dataFile,row.names=1) #real data
+    Xmi = readRDS(sprintf("%s/data/nhanes_data_mi.rds",outputDir)) #real data
+  } else #sim data
+  {
+    print("real data not found, using simulated...")
+    useSim =  T
+    Xf = read.csv(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes.csv",outputDir),row.names=1) 
+    Xmi = readRDS(sprintf("%s/data/yoglen_simulated_nhanes_data_with_outcomes_mi.rds",outputDir))
+  
+    Xf[,"RIDAGEYR"] = Xf[,"age"] #I named it differently in the simulated data
+    Xf[,"depression_score"] = Xf[,"depression_score_num"]
+    for (k in 1:length(Xmi)) 
+    {
+      Xmi[[k]][,"RIDAGEYR"] = Xmi[[k]][,"age"]
+      Xmi[[k]][,"depression_score"] = Xmi[[k]][,"depression_score_num"]
+    }
+
+  }
+
   lagg = list()
   laggse = list()
   laggsm = list()
@@ -236,7 +262,8 @@ gt = ggplot(plotdf,aes(x=x,y=y,ymin=y-yse,ymax=y+yse))+
     theme_minimal(base_size=24)
     #theme_classic(base_size=24)
 
-marrangeGrob(list(gage,gt),nrow=1,ncol=2,top=NULL)
+plot(gage)
+plot(gt)
 
 
 save=T
@@ -293,9 +320,10 @@ gleg = cowplot::get_legend(g[[1]])
 
 for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
 
-save=T
+save=F
 if(save)
 {
+  library(gridExtra)
   nrow = 10
   ncol = 9
   layout = matrix(seq_len(nrow*ncol),nrow=nrow,ncol=ncol,byrow=TRUE)
@@ -641,6 +669,8 @@ write.csv(temp[,c("prettyname","system","N","delta","deltase","pwilcox","padj")]
 
 
 ```{r}
+colours=c("deepskyblue1","purple3","deepskyblue3")
+names(colours)=c("Premenopause","MRT","No MRT")
 mustHavePr = TRUE
 useImputed=F #I have doubts about using this - it generally isn't used by the imputation models so its association will be broken
 acMatch=TRUE #only permits matching using non-imputed values
@@ -722,9 +752,10 @@ g = g[keepMe]
 systemsOutputDir = sprintf("%s/results",outputDir)
   gleg = ggdraw(cowplot::get_legend(g[[1]]))
 for (i in 1:length(g)) g[[i]] = g[[i]] + theme(legend.position="none")
-save=T
+save=F
 if(save)
 {
+  library(marrangeGrob)
 
 
 
@@ -973,7 +1004,8 @@ if(addYoavToAMH)
       
   }
 }
-  
+ 
+
 layout = matrix(c(1:length(g),rep(NA,9-length(g))),nrow=3,ncol=3,byrow=TRUE)
 marrangeGrob(g,nrow=3,ncol=3,top=NULL,layout_matrix=layout)
 
@@ -995,6 +1027,9 @@ temp[,"var"] = v
 temp[,"description"] = osum[v,"description"] #more info #won't work, codex doesn't have var names
 temp[,"nhanes"] = osum[v,"nhanes"]
 temp[,"notes"] = osum[v,"notes"]
+
+#simulated data doesn't have depression_score, so add it if not here
+if(!("depression_score"%in%colnames(Xf))) Xf[,"depression_score"] = Xf[,"depression_score_num"]
 
 #now count up Ns
 temp[,"N"] = NA
@@ -1222,7 +1257,7 @@ file = sprintf("%s/results/nhanes_menopause_timing.csv",outputDir)
 
 if(file.exists(file)&load)
 {
-  aggDep = read.csv(aggDep)
+  aggDep = read.csv(file)
 } else
 {
   stop("data not found")
@@ -1261,7 +1296,7 @@ save=T
 load=T
 
 aggopts =  "stats"
-if(useAC) aggopts = sprintf("%s_ac",aggopts)
+aggopts = sprintf("%s_ac",aggopts)
 aggf   = read.csv(sprintf("%s/results/nhanes_menopause_female_mean_%s.csv",outputDir,aggopts))
 aggfsd   = read.csv(sprintf("%s/results/nhanes_menopause_female_sd_%s.csv",outputDir,aggopts))
 
@@ -1368,6 +1403,20 @@ if(file.exists(filem) & load)
 ```
 fig s4
 ```{r}
+dataFile = sprintf("%s/data/nhanes_male_data.csv",outputDir)
+useSim=F
+if(file.exists(dataFile)) #real data
+{
+    print("real data found")
+  Xm = read.csv(dataFile,row.names=1) #real data
+} else #sim data
+{
+  print("real data not found, using simulated...")
+  useSim =  T
+  Xm = read.csv(sprintf("%s/data/simulated_nhanes_male.csv",outputDir),row.names=1) 
+  
+  Xm[,"RIDAGEYR"] = Xm[,"age"] #I named it differently in the simulated data
+}
 
 temp = Xm
 temp[,"x"] = Xm[,"RIDAGEYR"]-49
@@ -1431,7 +1480,17 @@ ggsave(sprintf("%s/results/%s.png",outputDir,"fig3s_males_legend"),gleg,width=8,
 
 #Fig S5 - HRT usage
 ```{r}
-Xf[,"survey_year"] = dplyr::case_when(
+file = sprintf("%s/data/survey_year_hrt.csv",outputDir)
+load=F
+save=T
+if(file.exists(file) & load)
+{
+  aggHRTSum = read.csv(file)
+} else
+{
+  #won't work, no survey year in simulated data :(
+    #needs real data
+  Xf[,"survey_year"] = dplyr::case_when(
                       Xf[,"surveyf"] == 1        ~ "1999-00",
                       Xf[,"surveyf"] == 2        ~ "2001-02",
                       Xf[,"surveyf"] == 3        ~ "2003-04",
@@ -1446,8 +1505,14 @@ Xf[,"survey_year"] = dplyr::case_when(
                       Xf[,"surveyf"] == 66       ~ "2018-19",
                       is.na(Xf[,"surveyf"])      ~ NA_character_)
 
-g = ggplot(Xf,aes(x=survey_year,y=100*bin_hrt_now))+
-  stat_summary()+
+aggHRTSum = aggregate(Xf[,"bin_hrt_now",drop=F],by=Xf[,"survey_year",drop=F],mean,na.rm=T)
+aggHRTSum[,"se"] = aggregate(Xf[,"bin_hrt_now",drop=F],by=Xf[,"survey_year",drop=F],SEM,na.rm=T)[,"bin_hrt_now"]
+  if(save) write.csv(aggHRTSum,file,row.names=F)
+}
+
+
+g = ggplot(aggHRTSum,aes(x=survey_year,y=100*bin_hrt_now,ymin=100*(bin_hrt_now-se),ymax=100*(bin_hrt_now+se)))+
+  geom_pointrange()+
   labs(x="Survey year",y="HRT usage (%)")+
   theme_minimal()
 g
@@ -1457,5 +1522,4 @@ if (save)
   ggsave(sprintf("%s/results/figs5_hrt_usage.pdf",outputDir),g,width=8,height=5)
   ggsave(sprintf("%s/results/figs5_hrt_usage.png",outputDir),g,width=8,height=5)
 }
-
 ```

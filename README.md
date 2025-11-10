@@ -18,17 +18,15 @@ Please cite as:
 ---
 
 ## 📘 Description
-Contains:
+Contains:  
+-essential analysis steps (i.e. yoglen model fitting)  
+-plot scripts for each figure  
+-aggregated data needed for each figure and summary stats  
+-simulated NHANES data  
+-unedited analysis scripts for transparency (transparency folder)  
 
--essential analysis steps (i.e. yoglen model fitting)
--plot scripts for each figure
--aggregated data needed for each figure and summary stats
--simulated NHANES data
--unedited analysis scripts for transparency (transparency folder)
-
-Does not include individualized data:
-
--NHANES data (download here: https://wwwn.cdc.gov/nchs/nhanes/)
+Does not include individualized data:  
+-NHANES data (download here: https://wwwn.cdc.gov/nchs/nhanes/)  
 -Clalit electronic medical records
 
 There is an associated Zenodo repository that is recommended but not strictly necessary:
@@ -37,17 +35,17 @@ There is an associated Zenodo repository that is recommended but not strictly ne
 ---
 
 ## Dependencies
-1. Rstudio is needed to run .rmd files (https://posit.co/downloads/)
-2. R packages (dependencies.R): c("survival","mgcv","survPen","dplyr, ggplot2","cowplot","scico","gridExtra","ggrepel")
+1. Rstudio is needed to run .rmd files (https://posit.co/downloads/)  
+2. R packages (dependencies.R): c("survival","mgcv","survPen","dplyr, ggplot2","cowplot","scico","gridExtra","ggrepel")  
 3. Some files are too large for GitHub and are on the associated Zenodo repository. Two options: (i) don't download the Zenodo files, continue as normal and use simulated data. (ii) download the Zenodo files that contain the exact analysis files.
 
 ---
 
 ## ⚙️ Installation
-1. Clone repository
-2. Install dependencies
-3. Install and open Rstudio 
-4. Ready to go!
+1. Clone repository  
+2. Install dependencies  
+3. Install and open Rstudio   
+4. Ready to go!  
 
 ```bash
 git clone git@github.com:AlonLabWIS/yoglen.git
@@ -64,14 +62,14 @@ Run plot.Rmd
 -This will use existing aggregated data from the original analysis
 
 ### Analysis
--This will default to using simulated data, unless the user provides real data.
-The general steps are:
-1. Estimate the final menstrual period (FMP) distribution and impute a distribution of values for each person (age_of_menopause_imputation.Rmd),
-2. Model selection (model_selection.Rmd),
-3. Plot results (plot.Rmd).
+-This will default to using simulated data, unless the user provides real data.  
+The general steps are:  
+1. Estimate the final menstrual period (FMP) distribution and impute a distribution of values for each person (age_of_menopause_imputation.Rmd),  
+2. Model selection (model_selection.Rmd),  
+3. Plot results (plot.Rmd).  
 
 ### Simulated data
--yoglen_simulation_study.Rmd will use the fitted models to simulate realistic data.
+-yoglen_simulation_study.Rmd will use the fitted models to simulate realistic data.  
 -yoglen_validation_step_function.Rmd simulates a simple step function to show that the approaches are insensitive to shifting and scaling of the FMP distribution.
 
 ## yoglen algorithm

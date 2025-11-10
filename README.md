@@ -36,7 +36,7 @@ Does not include individualized data:
 
 # Additional data
 
-There is an associated Zenodo repository that is recommended but not strictly necessary:
+There is an associated Zenodo repository that is recommended but not strictly necessary: (not up yet, Nov 10 - will be up within a few weeks)
 
 
 ---

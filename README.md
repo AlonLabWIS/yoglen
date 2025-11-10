@@ -100,6 +100,7 @@ this is exactly the weighted log-likelihood for regression with weights $\pi_{ij
 2. While expected log-likelihood $E[l|a]$ is decreasing:  
     2a. Estimate a weighted regression model using the vectorized $\pi_{ij}$ i.e. $f(t_{ij})$ with weight $\pi_{ij}$  
     2b. Update $\pi_{ij}=p(t_i|a_i,y_i)$.  
+
 For the linear model we solve the likelihood exactly. For generalized linear models we used a spline model with default settings and weighted with the ($t_j,\pi_{ij}$) grid. For multivariate adaptive regression splines we used the $\pi_{ij}$ as weights to resample and proceeded normally with default settings.
 
 There are two methods used in the original paper:

@@ -29,7 +29,6 @@ Does not include individualized data:
 -NHANES data (download here: https://wwwn.cdc.gov/nchs/nhanes/)  
 -Clalit electronic medical records
 
-There is an associated Zenodo repository that is recommended but not strictly necessary:
 
 
 ---
@@ -39,7 +38,17 @@ There is an associated Zenodo repository that is recommended but not strictly ne
 2. R packages (dependencies.R): c("survival","mgcv","survPen","dplyr, ggplot2","cowplot","scico","gridExtra","ggrepel")  
 3. Some files are too large for GitHub and are on the associated Zenodo repository. Two options: (i) don't download the Zenodo files, continue as normal and use simulated data. (ii) download the Zenodo files that contain the exact analysis files.
 
+
 ---
+
+# Additional data
+
+There is an associated Zenodo repository that is recommended but not strictly necessary:
+
+
+---
+
+
 
 ## ⚙️ Installation
 1. Clone repository  

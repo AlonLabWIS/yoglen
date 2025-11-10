@@ -108,8 +108,8 @@ For the linear model we solve the likelihood exactly. For generalized linear mod
 
 There are two methods used in the original paper:
 
-Method 1. (used on NHANES)
-$y_i$ is menopause status. If menopause age is known then it is set to a normal random variable with standard deviation 1 (can be changed as function argument).
+Method 1. (used on NHANES)  
+We have observed $y_j$ equal to binary menopause status and current age, thus constaining allowed values of $a_m$ to be before/after current age depending on status. If menopause age is known then it is set to a normal random variable with standard deviation 1 (can be changed as function argument).
 
 Method 2. (used on Clalit)
 Piecewise linear model for $f(t)$ with no menopause status or menopause age. Solved exactly in the paper.

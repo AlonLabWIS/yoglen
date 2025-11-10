@@ -38,7 +38,7 @@ Does not include individualized data:
 
 ## ⚙️ Installation
 1. Clone repository  
-2. Install dependencies  
+2. Install dependencies (dependencies.R)  
 3. Install and open Rstudio
 4. Set outputDir to your desired directory (top of each .Rmd script)
 6. Ready to go!  

@@ -80,7 +80,7 @@ $$
   l=\sum_i \big[ ln(\pi_{ij})-\frac{1}{2\sigma(t_i)^2}(y_i-f(t_i))^2-\frac{1}{2}ln(2\pi\sigma(t_i)^2) \big]
 $$
 
-where $\pi_{ij}$ is the probability of $t_i$ equalling the $j$th grid value given the age of the individual $a_i$ (normalized to $\sum_j \pi_{ij} = 1$).
+where $\pi_{ij}$ is the probability of $t_i$ equalling the $j$ th grid value given the age of the individual $a_i$ (normalized to $\sum_j \pi_{ij} = 1$).
 Then we use expectation maximization on the log-likelihood. The conditional expectation over all possible t given age is
 
 $$

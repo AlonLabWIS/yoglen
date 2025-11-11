@@ -1,11 +1,16 @@
 # yoglen latent variable ("deconvolution") algorithm for inferring unknown menopause timing
 **Background**
-yoglen was developed using R version 4.5.1. yoglen contains scripts for systems analysis of menopause from large scale studies where menopause timing is unknown. yoglen uses latent variable modelling to infer the time to menopause changes of lab tests and outcomes. it includes two parallel analyses using two related but unique models and two different datasets (NHANES and Clalit).
+yoglen was developed using R version 4.5.1. yoglen contains scripts for systems analysis of menopause from large scale studies where menopause timing is unknown. yoglen uses latent variable modelling to infer the time to menopause changes of lab tests and outcomes. it includes two parallel analyses using two related but unique models and two different datasets (NHANES and Clalit). 
+
+For additional information see the full paper (below).
 
 ---
 
 # Citation info
 Please cite as:
+
+    Pridham*, Hayut*, et al. Dynamics of menopause from deconvolution of millions of lab tests. arXiv [q-bio.TO] (2025) doi:10.48550/arXiv.2511.05906.
+  
 
 
 ---
